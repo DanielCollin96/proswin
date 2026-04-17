@@ -323,4 +323,4 @@ In case of questions or bugs, please contact Daniel at collin@gfz.de.
 
 ## License
 
-This work is released under [MIT License](TBD).
+This work is released under [MIT License](https://github.com/DanielCollin96/proswin/blob/main/LICENSE).
