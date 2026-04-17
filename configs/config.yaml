@@ -1,0 +1,196 @@
+# PROSWIN Configuration
+# =============================================================================
+# Central configuration file for the PROSWIN solar wind speed prediction
+# experiment. Loaded at runtime by ConfigLoader
+# (src/proswin/utils/configurator.py), which resolves all paths relative to
+# the project root and validates the dataset interval format.
+#
+# Sections:
+#   experiment — metadata for reproducibility and citation
+#   paths      — file system layout
+#   dataset    — data selection and feature engineering
+#   model      — architecture hyperparameters
+#   training   — optimiser settings and training schedule
+# =============================================================================
+
+
+# ---------------------------------------------------------------------------
+# Experiment metadata
+# ---------------------------------------------------------------------------
+experiment:
+  description: >
+    Probabilistic solar wind speed prediction using a Swin Transformer
+    with sequential mu/sigma head training.
+  authors: "Daniel Collin"
+  date_created: "April 16, 2026"
+  # Base random seed for all RNGs (Python, NumPy, PyTorch). In multi-GPU
+  # runs each rank uses seed + rank to avoid identical augmentation across
+  # processes while keeping results fully reproducible.
+  seed: 42
+
+
+# ---------------------------------------------------------------------------
+# File system paths (all relative to the project root)
+# ---------------------------------------------------------------------------
+paths:
+  results: "results"
+  # Solar EUV and magnetogram images; expects subdirectories:
+  # aia_171/, aia_193/, aia_211/, hmi/
+  solar_image_dir: "data/solar_images"
+  # Solar event catalogues; expects:
+  # cme_list.csv, hss_list.csv, enhancement_list.csv
+  solar_event_dir: "data/solar_events"
+  # Scalar physical feature time series; expects:
+  # solar_wind_speed.csv, sunspot_number.csv, heliospheric_latitude.csv,
+  # ch_area.csv
+  physical_features_dir: "data/physical_features"
+  # Pre-processed ML-ready tensors written by SolarDataset on the first run
+  # and reloaded on subsequent runs (see precompute_and_reuse_dataset below)
+  ml_data_dir: "data/machine_learning"
+
+
+# ---------------------------------------------------------------------------
+# Dataset configuration
+# ---------------------------------------------------------------------------
+dataset:
+  # Inclusive start and end of the full observation window (ISO 8601)
+  dataset_interval:
+    - '2010-06-01T00:00:00'
+    - '2024-06-30T23:00:00'
+
+  # SDO/AIA EUV image channels used as input (maximum 3 supported by the
+  # model's image encoder, which expects an RGB-like 3-channel tensor)
+  channels:
+    - aia_171
+    # - aia_193
+    - aia_211
+    # - hmi  # Uncomment to include HMI line-of-sight magnetograms
+
+  # Scalar features concatenated with the image embedding before the
+  # prediction heads
+  physical_features:
+    - solar_wind_speed_persistence
+    - sunspot_number
+    - solar_cycle_year
+    - heliospheric_latitude
+
+  # One-solar-rotation persistence feature (~27-day recurrence of solar wind
+  # structure). The interval [28, 26] selects the hourly wind speed record
+  # from 28 to 26 days before the target timestamp, covering a 48-sample
+  # window centred on one Carrington rotation ago.
+  solar_wind_speed_persistence:
+    interval:
+      - 28  # days before target (start of window)
+      - 26  # days before target (end of window)
+    cadence: 1  # sampling cadence in hours
+
+  # Window length (months) over which the sunspot number is used as a feature
+  sunspot_number_months: 12
+
+  # If true, the assembled dataset tensors are saved to ml_data_dir on the
+  # first run and reloaded on subsequent runs to avoid repeated computation
+  precompute_and_reuse_dataset: true
+
+
+# ---------------------------------------------------------------------------
+# Model architecture
+# ---------------------------------------------------------------------------
+model:
+  # Identifier used to label saved checkpoints, prediction files, and W&B runs
+  model_name: proswin
+
+  # Swin Transformer variant used as the image encoder backbone.
+  # Options: swin_tiny | swin_small | swin_base
+  image_encoder: "swin_tiny"
+
+  # Mean prediction head (mu): MLP on top of the concatenated image and
+  # physical feature embedding
+  mu:
+    hidden_layer_size: 168
+    dropout: 0.666
+
+  # Uncertainty prediction head (sigma): separate MLP trained after the mu
+  # head is frozen (sequential training)
+  sigma:
+    hidden_layer_size: 143
+    dropout: 0.704
+
+  # Sigma clamping: during inference, sigma is clipped so that the
+  # quantile_to_clamp-th percentile of the predicted lognormal distribution
+  # does not exceed physical_upper_limit. Prevents physically implausible
+  # forecasts without affecting the mean prediction.
+  clamp_sigma: true
+  quantile_to_clamp: 0.99
+  physical_upper_limit: 850  # km/s — approximate upper bound of solar wind speed
+
+
+# ---------------------------------------------------------------------------
+# Training configuration
+# Mu and sigma heads are trained sequentially; each head has its own
+# optimiser, batch size, learning rate, and loss settings.
+# ---------------------------------------------------------------------------
+training:
+  # Which prediction heads to train in this run.
+  # [mu, sigma]: train both heads from scratch (full training run).
+  # [sigma]:     freeze mu and train only the uncertainty head; requires a
+  #              pre-trained checkpoint specified in trained_mu_model_file.
+  fit_prediction_head: [mu, sigma]  # options: mu, sigma
+
+  # Path (relative to project root) to a pre-trained mu checkpoint.
+  # Only loaded when fit_prediction_head is [sigma].
+  trained_mu_model_file: "data/models/171-211.pth"
+
+  # Set to true when running on a multi-GPU node. Batches are distributed
+  # across available GPUs via PyTorch Distributed Data Parallel (DDP).
+  # The script must be launched with torchrun, which sets the required
+  # RANK / WORLD_SIZE / LOCAL_RANK environment variables automatically.
+  use_multiple_gpus: false
+
+  # Weights & Biases project name for experiment tracking
+  wandb_project: proswin
+
+  train_test_scheme: cross_validation
+
+  cross_validation:
+    n_folds: 5
+    # sequential: time series is broken into chunks of equal length and
+    # assigned to folds sequentially
+    split: "sequential"
+    # Days excluded between adjacent train and test folds to prevent data
+    # leakage. Set to 90 days (>> 27-day Carrington rotation) to ensure that
+    # the solar wind structure seen in one fold does not correlate with the
+    # neighbouring fold.
+    gap_days: 90
+
+  # Save a checkpoint whenever validation loss improves during training
+  save_best_model_after_each_epoch: true
+
+  # --- Mu head (mean prediction) ---
+  mu:
+    optimizer: "Adam"
+    batch_size: 32
+    learning_rate: 2.863e-6
+    epochs: 200
+    # Stop training if validation loss does not improve for this many epochs
+    early_stopping_epochs: 20
+    loss_function: mse
+    # Focal-style sample weighting: gives higher loss weight to samples near
+    # high-speed stream peaks, so the model is penalised more for missing
+    # extreme events. alpha > 0 activates weighting; gamma controls sharpness.
+    # Set alpha = 0 to assign equal weight to all samples.
+    loss_weights_alpha: 5.0
+    loss_weights_gamma: 3.0
+
+  # --- Sigma head (uncertainty prediction) ---
+  sigma:
+    optimizer: "Adam"
+    batch_size: 16
+    learning_rate: 3.634e-7
+    epochs: 200
+    # Stop training if validation loss does not improve for this many epochs
+    early_stopping_epochs: 20
+    # Negative log-likelihood of the predicted lognormal distribution
+    loss_function: nll
+    # No sample weighting for the sigma head (alpha = 0 disables weighting)
+    loss_weights_alpha: 0.0
+    loss_weights_gamma: 0.0

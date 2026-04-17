@@ -1,0 +1,13 @@
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.claude/
+.idea/
+.git/
+results/
+wandb/
+logs/
+data/
+readme_notes.md
