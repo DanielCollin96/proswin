@@ -38,9 +38,8 @@ PROSWIN is a probabilistic deep-learning model for forecasting the solar wind sp
 3. [Dataset preparation](#dataset-preparation)
 4. [Repository structure](#repository-structure)
 5. [Reproducing the experiments](#reproducing-the-experiments)
-6. [Notes for running on multiple GPUs](#running-on-an-hpc-cluster-slurm)
+6. [Notes for running on multiple GPUs](#notes-for-running-on-multiple-gpus)
 7. [Configuration reference](#configuration-reference)
-8. [Citation](#citation)
 
 ---
 
@@ -99,7 +98,7 @@ Network outputs are in a standardised log-space. Inverting the scaler and re-par
 
 ```bash
 # 1. Clone the repository
-git clone [repository URL]
+git clone https://github.com/DanielCollin96/proswin.git
 cd proswin
 
 # 2. Create a virtual environment and install all dependencies
