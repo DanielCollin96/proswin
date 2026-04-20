@@ -5,7 +5,6 @@ predictions (climatology, persistence, CH area baseline), reads literature model
 predictions, and produces plot comparison plots via
 :class:`ComparisonPlotter`.
 """
-import logging
 import pathlib
 
 import matplotlib.pyplot as plt
@@ -25,13 +24,6 @@ from proswin.evaluation.model_comparison import ComparisonPlotter
 from proswin.evaluation.solar_wind_prediction_evaluator import PredictionEvaluator
 from proswin.utils.configurator import ConfigLoader
 from proswin.utils.interpolation_dates import interpolate_predictions
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -124,7 +116,7 @@ def main() -> None:
             results_dict[model] = results[0]
 
         model_results_table = pd.DataFrame(results_dict)
-        logger.info("Results for group '%s':\n%s", group, model_results_table)
+        config.logger.info("Results for group '%s':\n%s", group, model_results_table)
         comp_plotter = ComparisonPlotter(
             model_results_table, config.paths['figures'], save_label=group
         )

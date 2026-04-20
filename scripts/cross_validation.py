@@ -5,7 +5,6 @@ split, then delegates to :class:`CrossValidationRunner` to train and evaluate
 the PROSWIN model across all folds. Designed to run on a single node or under
 DDP on HPC/SLURM.
 """
-import logging
 import pathlib
 
 import torch
@@ -14,13 +13,6 @@ from proswin.data_management.cv_split_generator import SequentialCVSplitGenerato
 from proswin.data_management.solar_dataset import SolarDataset
 from proswin.model.cv_runner import CrossValidationRunner
 from proswin.utils.configurator import ConfigLoader
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger(__name__)
 
 
 def main() -> None:

@@ -15,13 +15,6 @@ from proswin.evaluation.hss_finder import HSSFinder
 from proswin.evaluation.solar_wind_prediction_evaluator import PredictionEvaluator
 from proswin.utils.configurator import ConfigLoader
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger(__name__)
-
 
 def main() -> None:
     """Load a saved prediction CSV and evaluate it against observations.
@@ -71,8 +64,8 @@ def main() -> None:
         predictions, observations, hss_finder, interpolation_dates
     )
     results, bs_table = evaluator.evaluate()
-    logger.info("Evaluation results:\n%s", results)
-    logger.info("Brier score table:\n%s", bs_table)
+    config.logger.info("Evaluation results:\n%s", results)
+    config.logger.info("Brier score table:\n%s", bs_table)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,6 @@ Provides a non-cross-validated training run using hardcoded study-period
 date ranges (2010-06-01 – 2024-06-30 split into train / val / test). Use
 ``scripts/cross_validation.py`` for the full CV pipeline instead.
 """
-import logging
 import pathlib
 from datetime import datetime
 
@@ -19,13 +18,6 @@ from proswin.evaluation.solar_wind_prediction_evaluator import PredictionEvaluat
 from proswin.model.solar_model_trainer import SolarModelTrainer
 from proswin.model.solar_swin_transformer import SolarSwinTransformer
 from proswin.utils.configurator import ConfigLoader
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -118,6 +110,7 @@ def main() -> None:
             point_prediction=True,
             use_multiple_gpus=config.train_config['use_multiple_gpus'],
             distribution_transformer=loader_creator.output_scaler,
+            physical_feature_scaler=loader_creator.input_scaler,
         )
 
         wandb_config = SolarModelTrainer.build_wandb_config(
@@ -206,8 +199,8 @@ def main() -> None:
             predictions, observations, hss_finder, missing_test
         )
         results, bs_table = evaluator.evaluate()
-        logger.info("Evaluation results:\n%s", results)
-        logger.info("Brier score table:\n%s", bs_table)
+        config.logger.info("Evaluation results:\n%s", results)
+        config.logger.info("Brier score table:\n%s", bs_table)
 
     finally:
         if config is not None:

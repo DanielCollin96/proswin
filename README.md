@@ -180,6 +180,7 @@ proswin/
 ├── scripts/                           # Entry-point scripts (run these directly)
 │   ├── cross_validation.py            # Full CV training pipeline
 │   ├── train_single_split.py          # Single fixed-split training
+│   ├── predict.py                     # Load model & predict with it (inference)
 │   ├── evaluate_predictions.py        # Load & evaluate a saved prediction CSV
 │   └── compare_models.py              # Cross-model comparison + figures
 └── src/proswin/
@@ -249,21 +250,29 @@ It also computes the baseline predictions and compares our best model the baseli
 python scripts/compare_models.py
 ```
 
-### Step 4 — (Optional) Evaluate a single model
-
-This evaluates the predictions for a single saved model without retraining. Edit `scripts/evaluate_predictions.py` and replace `'test_model'` with your model name.
-
-```bash
-python scripts/evaluate_predictions.py
-```
-
-### Step 5 — (Optional) Single-split training run
+### Step 3 — (Optional) Single-split training run
 
 This runs a single training iteration on a fixed train/val/test split. 
 Edit `scripts/train_single_split.py` and replace `'train_dates'`, `'val_dates'`, and `'test_dates'` with your the desired training, validation and test dates, respectively.
 
 ```bash
 python scripts/train_single_split.py
+```
+
+### Step 4 — (Optional) Predict with a trained model
+
+This computes the predictions for a saved model. Edit `scripts/predict.py` and replace the model path with the desired model.
+
+```bash
+python scripts/predict.py
+```
+
+### Step 5 — (Optional) Evaluate predictions
+
+This evaluates saved predictions. Edit `scripts/evaluate_predictions.py` and replace `'test_model'` with your model name.
+
+```bash
+python scripts/evaluate_predictions.py
 ```
 
 

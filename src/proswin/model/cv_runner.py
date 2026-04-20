@@ -327,7 +327,8 @@ class CrossValidationRunner:
 
         Args:
             loader_creator: Used to supply the fold-specific fitted
-                ``DistributionTransformer`` (output scaler) to the model.
+                ``DistributionTransformer`` (output scaler)  and the
+                physical_feature_scaler (input scaler) to the model.
 
         Returns:
             Freshly initialised ``SolarSwinTransformer``.
@@ -349,6 +350,7 @@ class CrossValidationRunner:
             point_prediction=True,
             use_multiple_gpus=self._config.train_config['use_multiple_gpus'],
             distribution_transformer=loader_creator.output_scaler,
+            physical_feature_scaler=loader_creator.input_scaler,
         )
 
     # ------------------------------------------------------------------

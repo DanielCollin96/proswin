@@ -5,6 +5,7 @@ import timm
 import torch
 import torch.nn as nn
 from scipy.stats import norm
+from sklearn.preprocessing import StandardScaler
 
 from proswin.data_management.distribution_transformer import DistributionTransformer
 
@@ -55,6 +56,10 @@ class SolarSwinTransformer(nn.Module):
         distribution_transformer: Scaler/transformer used to normalise the
             target variable. Required unless ``point_prediction=True`` or
             ``clamp_sigma=False``.
+        physical_feature_scaler: Scaler/transformer used to standardize the
+            physical input features. It is not used directly in this class,
+            but needs to be saved with the model hyperparameters for
+            predicting with a saved model.
 
     Raises:
         ValueError: If ``image_encoder_name`` is not one of the supported
@@ -78,6 +83,7 @@ class SolarSwinTransformer(nn.Module):
         point_prediction: bool = False,
         use_multiple_gpus: bool = False,
         distribution_transformer: DistributionTransformer | None = None,
+        physical_feature_scaler: StandardScaler | None = None,
     ) -> None:
         super().__init__()
 
@@ -102,6 +108,7 @@ class SolarSwinTransformer(nn.Module):
         self.min_sigma: float = 1e-6
         self.point_prediction = point_prediction
         self.distribution_transformer = distribution_transformer
+        self.physical_feature_scaler = physical_feature_scaler
         self.clamp_sigma = clamp_sigma
         self.quantile_to_clamp = quantile_to_clamp
         self.physical_upper_limit = physical_upper_limit
@@ -385,6 +392,7 @@ def save_model(
         "hyperparameters": hparams,
         "state_dict": model.state_dict(),
         "distribution_transformer": model.distribution_transformer,
+        "physical_feature_scaler": model.physical_feature_scaler,
     }
 
     torch.save(checkpoint, path)
@@ -425,12 +433,14 @@ def load_model(path: str | Path) -> SolarSwinTransformer:
     distribution_transformer: DistributionTransformer = (
         checkpoint["distribution_transformer"]
     )
+    physical_feature_scaler= checkpoint["physical_feature_scaler"]
 
     # Rebuild the architecture — pretrained_backbone=False skips the internet
     # download since weights come entirely from the saved state dict
     model = SolarSwinTransformer(
         use_pretrained_image_encoder_weights=False,
         distribution_transformer=distribution_transformer,
+        physical_feature_scaler=physical_feature_scaler,
         **hparams,
     )
 
