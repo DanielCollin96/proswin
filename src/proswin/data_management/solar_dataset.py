@@ -20,15 +20,39 @@ from proswin.data_management.physical_data_loader import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Column-name helpers
+# ---------------------------------------------------------------------------
+
+# Maps SDO channel folder names to their ml_dataset image-path column names.
+CHANNEL_TO_COL: dict[str, str] = {
+    'aia_171': '171_image_path',
+    'aia_193': '193_image_path',
+    'aia_211': '211_image_path',
+    'hmi': 'hmi_image_path',
+}
+
+
 class SolarDataset(Dataset):
     """PyTorch Dataset for multi-modal solar wind speed forecasting.
 
     Combines SDO solar images with scalar physical time-series features
     (solar wind speed persistence, sunspot number, heliospheric latitude,
-    solar cycle year) to form multi-modal input samples. On first use,
-    availability and value tables are computed by scanning all data files;
-    subsequent runs reload these tables from cache if
-    ``precompute_and_reuse_dataset`` is enabled.
+    solar cycle year) to form multi-modal input samples.
+
+    **Dataset loading priority**
+
+    On construction the class tries two sources in order, using the first
+    that succeeds:
+
+    1. ``ml_data_dir / 'ml_dataset.csv'`` – either the published dataset or a
+       previously saved cache.  Image paths stored here are *relative* (e.g.
+       ``aia_171/2010/05/171_2010-05-28_00:00.npy``) and are resolved against
+       ``solar_image_dir`` at load time.
+    2. Full from-scratch scan of the raw data directories.
+
+    After a successful from-scratch scan the result is saved as
+    ``ml_dataset.csv`` (with *relative* image paths) so future runs are fast.
 
     Args:
         solar_image_dir: Root directory with one sub-folder per SDO channel
@@ -36,7 +60,8 @@ class SolarDataset(Dataset):
         solar_event_dir: Directory containing solar event CSVs
             (``cme_list.csv``, ``hss_list.csv``, ``enhancement_list.csv``).
         physical_features_dir: Directory containing physical feature CSVs.
-        ml_data_dir: Directory used to cache pre-computed feature files.
+        ml_data_dir: Directory used to cache ``ml_dataset.csv`` and to look
+            for a pre-existing copy of the published dataset.
         dataset_interval: ``[start, end]`` UTC datetimes defining the full
             dataset window. Defaults to June 2010 – June 2024.
         channels: SDO channel names to load (e.g. ``['aia_171', 'aia_193']``).
@@ -49,10 +74,9 @@ class SolarDataset(Dataset):
             lag samples. Defaults to ``1``.
         sunspot_number_months: Number of preceding months of sunspot data to
             include as features. Defaults to ``12``.
-        precompute_and_reuse_dataset: If ``True``, save computed availability
-            and feature tables to ``ml_data_dir`` and reload them on
-            subsequent runs to avoid repeated file scanning. Defaults to
-            ``True``.
+        precompute_and_reuse_dataset: If ``True``, save the assembled dataset
+            to ``ml_data_dir / 'ml_dataset.csv'`` after a from-scratch scan
+            and reload it on subsequent runs. Defaults to ``True``.
         rank: Process rank for distributed training (used only for logging
             so that only rank-0 emits progress messages). Defaults to ``0``.
         logger: Optional logger for progress messages. If ``None``, no
@@ -116,8 +140,14 @@ class SolarDataset(Dataset):
         self.logger = logger
         self.rank = rank
 
+        # Derived channel → column-name mapping for the requested channels
+        self._image_cols: list[str] = [CHANNEL_TO_COL[c] for c in self.channels]
+
         self._check_paths()
-        self._load_physical_features()
+        # Physical feature time series are only needed when building from
+        # scratch; skip loading them if ml_dataset.csv is already available.
+        if not (self.ml_data_dir / 'ml_dataset.csv').exists():
+            self._load_physical_features()
 
         # Initialise dataset containers (populated by _create_dataset below)
         self.data = pd.DataFrame(dtype='float32')
@@ -132,7 +162,7 @@ class SolarDataset(Dataset):
             self.logger.info('Creating dataset...')
         self._create_dataset()
         # Initialise uniform per-sample weights (all 1.0); override with
-        # set_loss_function_weights() before training to up-weight HSS events
+        # set_loss_function_weights() before training to up-weight HSS events.
         self.set_loss_function_weights()
 
     # ------------------------------------------------------------------
@@ -142,11 +172,17 @@ class SolarDataset(Dataset):
     def _check_paths(self) -> None:
         """Verify that all required data files and directories exist.
 
+        Image channel directories and solar event CSVs are always checked
+        since they are needed at sample retrieval time regardless of how the
+        dataset was built.  Physical feature CSVs are only checked when
+        ``ml_dataset.csv`` is absent, because in that case a from-scratch scan
+        is needed and the raw files must be present.
+
         Raises:
-            FileNotFoundError: If a required image channel directory or
-                ``solar_wind_speed.csv`` is missing.
-            NotImplementedError: If any solar event list CSV is missing
-                (on-the-fly generation from raw data is not implemented).
+            FileNotFoundError: If a required image channel directory or,
+                when no ``ml_dataset.csv`` is found, ``solar_wind_speed.csv``
+                is missing.
+            NotImplementedError: If any solar event list CSV is missing.
         """
         for channel in self.channels:
             if not (self.solar_image_dir / channel).exists():
@@ -166,12 +202,21 @@ class SolarDataset(Dataset):
                     self.logger.warning(msg)
                 raise NotImplementedError(msg)
 
-        # Solar wind speed is always required (it is also the forecast target)
-        if not (self.physical_features_dir / 'solar_wind_speed.csv').exists():
-            raise FileNotFoundError(
-                f"'solar_wind_speed.csv' not found in "
-                f"'{self.physical_features_dir}'."
-            )
+        # Physical feature CSVs are only needed for a from-scratch build.
+        # If ml_dataset.csv already exists all features are read from there.
+        if not (self.ml_data_dir / 'ml_dataset.csv').exists():
+            required_files = ['solar_wind_speed.csv']
+            if 'heliospheric_latitude' in self.physical_input_data:
+                required_files.append('heliospheric_latitude.csv')
+            if 'sunspot_number' in self.physical_input_data:
+                required_files.append('sunspot_number.csv')
+            for fname in required_files:
+                if not (self.physical_features_dir / fname).exists():
+                    raise FileNotFoundError(
+                        f"'{fname}' not found in '{self.physical_features_dir}' "
+                        f"and no 'ml_dataset.csv' was found in "
+                        f"'{self.ml_data_dir}' to fall back on."
+                    )
 
     def _load_physical_features(self) -> None:
         """Load physical feature time series from disk into instance attributes."""
@@ -283,20 +328,18 @@ class SolarDataset(Dataset):
         }
 
         loaded_channels = []
-        for channel in self.channels:
+        for channel, col in zip(self.channels, self._image_cols):
             if channel not in channel_map:
                 raise ValueError(f"Unknown SDO channel: '{channel}'.")
             norm_fn = channel_map[channel]
-            img = np.load(item.loc[channel])
+            img = np.load(item.loc[col])
             loaded_channels.append(norm_fn(img))
 
         # The Swin Transformer encoder expects a 3-channel (RGB-like) input.
-        # Duplicate channels when fewer than 3 are provided so the architecture
-        # always receives a fixed-size tensor.
+        # Duplicate channels when fewer than 3 are provided.
         if len(loaded_channels) == 1:
             image = np.stack([loaded_channels[0]] * 3, axis=0)
         elif len(loaded_channels) == 2:
-            # First channel fills slot 0; second channel fills slots 1 and 2
             image = np.stack(
                 [loaded_channels[0], loaded_channels[1], loaded_channels[1]], axis=0
             )
@@ -308,8 +351,7 @@ class SolarDataset(Dataset):
         image_tensor = torch.from_numpy(image).float()
 
         target = np.expand_dims(item.loc['solar_wind_speed'], axis=0)
-        # Column layout in self.data: [solar_wind_speed | channels... | physical_features...]
-        # Skip col 0 (target) and cols 1..num_images (image paths) to reach features
+        # Column layout in self.data: [solar_wind_speed | image_cols... | physical_features...]
         physical_features = item.iloc[self.num_images + 1:].astype(float)
         loss_function_weights = np.expand_dims(self.weights.iloc[idx], axis=0)
         target_timestamp = target_date.timestamp()  # seconds since Unix epoch
@@ -327,22 +369,16 @@ class SolarDataset(Dataset):
         }
 
     # ------------------------------------------------------------------
-    # Data availability scanning
+    # Data availability scanning  (used only for from-scratch builds)
     # ------------------------------------------------------------------
 
-    def _check_images(self, folder: Path, key: str) -> None:
+    def _check_images(self, folder: Path, col: str) -> None:
         """Scan a directory for ``.npy`` image files and register their timestamps.
-
-        For each valid ``.npy`` file the filename is parsed to extract the
-        observation timestamp, which is then marked as available in
-        ``self.available_datapoints`` and stored as a file path string in
-        ``self.datapoint_values``. Files that cannot be parsed are silently
-        skipped.
 
         Args:
             folder: Directory to scan for ``.npy`` files.
-            key: Column name in ``available_datapoints`` and
-                ``datapoint_values`` under which to register results.
+            col: Column name in the new ml_dataset convention
+                (e.g. ``'171_image_path'``) under which to register results.
         """
         if os.path.isdir(folder):
             for file_name in os.listdir(folder):
@@ -353,8 +389,8 @@ class SolarDataset(Dataset):
                     timestamp = datetime.strptime(
                         f"{date_str}_{time_str[:4]}", '%Y-%m-%d_%H:%M'
                     )
-                    self.available_datapoints.loc[timestamp, key] = True
-                    self.datapoint_values.loc[timestamp, key] = str(
+                    self.available_datapoints.loc[timestamp, col] = True
+                    self.datapoint_values.loc[timestamp, col] = str(
                         folder / file_name
                     )
                 except Exception:
@@ -362,10 +398,6 @@ class SolarDataset(Dataset):
 
     def _check_sunspot_number(self, current_month: datetime) -> None:
         """Register sunspot number availability for all hours in a given month.
-
-        If the monthly sunspot number is not NaN, marks every hourly
-        timestep in the month as available and fills in the constant monthly
-        value in ``self.datapoint_values``.
 
         Args:
             current_month: First day of the month to process.
@@ -384,33 +416,24 @@ class SolarDataset(Dataset):
     def _check_available_data(self) -> None:
         """Scan image directories and physical feature time series for data availability.
 
-        Iterates over the dataset interval month by month. For each month,
-        scans the corresponding image subdirectories and registers sunspot
-        availability. Scalar features (solar wind speed, heliospheric
-        latitude, solar cycle year) are registered directly from the loaded
-        time series. Results are stored in ``self.available_datapoints``
-        (boolean flags) and ``self.datapoint_values`` (numeric or path values).
+        Stores results in ``self.available_datapoints`` (boolean flags) and
+        ``self.datapoint_values`` (numeric or path values), both indexed by
+        hourly timestamps.  Image path values are stored as *absolute* paths;
+        they are converted to *relative* paths (relative to
+        ``self.solar_image_dir``) before being written to ``ml_dataset.csv``.
 
-        The scan window starts ``sunspot_number_months`` months before
-        ``dataset_interval[0]`` so that sunspot lag features are available
-        for the very first target timestep.
-
-        If ``precompute_and_reuse_dataset`` is ``True``, the resulting tables
-        are written to ``ml_data_dir`` as ``data_availability.csv`` and
-        ``data_values.csv``.
+        The column names in both DataFrames use the new *ml_dataset*
+        convention throughout.
         """
         physical_data_cols = ['solar_wind_speed'] + list(self.physical_input_data)
-        # solar_cycle_year and solar_wind_speed_persistence are derived at
-        # runtime from preloaded series; they don't need file-based scanning
         for derived in ('solar_cycle_year', 'solar_wind_speed_persistence'):
             if derived in physical_data_cols:
                 physical_data_cols.remove(derived)
 
-        cols = self.channels + physical_data_cols
-        dtypes = [str] * len(self.channels) + [float] * len(physical_data_cols)
+        # Use new column names: image cols first, then physical scalar cols
+        cols = self._image_cols + physical_data_cols
+        dtypes = [str] * len(self._image_cols) + [float] * len(physical_data_cols)
 
-        # Extend the scan window back so that sunspot lag features are
-        # populated for the very first target timestep
         start = (
             self.dataset_interval[0]
             - relativedelta(months=self.sunspot_number_months)
@@ -431,7 +454,7 @@ class SolarDataset(Dataset):
             columns=cols,
         ).astype(dtype=dict(zip(cols, dtypes)))
 
-        # Register solar wind speed availability from the loaded time series
+        # Register solar wind speed
         idx_intersection = self.solar_wind_speed.index.intersection(
             self.available_datapoints.index
         )
@@ -440,8 +463,6 @@ class SolarDataset(Dataset):
             self.solar_wind_speed.loc[idx_intersection]
         )
 
-        # Guard with hasattr: these attributes only exist when the
-        # corresponding feature is included in physical_input_data
         if hasattr(self, 'heliospheric_latitude'):
             idx_intersection = self.heliospheric_latitude.index.intersection(
                 self.available_datapoints.index
@@ -476,20 +497,12 @@ class SolarDataset(Dataset):
             ):
                 self.logger.info(f'Checking files for {year_str}.')
                 printed_years.add(year_str)
-            for channel in self.channels:
+            for channel, col in zip(self.channels, self._image_cols):
                 self._check_images(
-                    self.solar_image_dir / channel / year_str / month_str, channel
+                    self.solar_image_dir / channel / year_str / month_str, col
                 )
             self._check_sunspot_number(current_month)
             current_month += relativedelta(months=1)
-
-        if self.precompute_and_reuse_dataset:
-            self.available_datapoints.to_csv(
-                self.ml_data_dir / 'data_availability.csv', index=True
-            )
-            self.datapoint_values.to_csv(
-                self.ml_data_dir / 'data_values.csv', index=True
-            )
 
     # ------------------------------------------------------------------
     # Feature assembly
@@ -502,11 +515,6 @@ class SolarDataset(Dataset):
     ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Compute availability flags and values for all physical and image features.
 
-        For each requested feature, looks up the corresponding entry in
-        ``self.available_datapoints`` and ``self.datapoint_values`` at the
-        appropriate lag relative to each target date, and returns the results
-        as parallel DataFrames.
-
         Args:
             persistence_td: Time deltas for each solar wind speed
                 persistence lag.
@@ -514,7 +522,7 @@ class SolarDataset(Dataset):
                 sunspot number lags.
 
         Returns:
-            Tuple of four DataFrames, all indexed by ``self.target_dates``:
+            Tuple of four DataFrames indexed by ``self.target_dates``:
 
             - ``avail_image_features``: Boolean availability flags for images.
             - ``avail_physical_features``: Boolean availability flags for
@@ -526,7 +534,7 @@ class SolarDataset(Dataset):
         data_physical: list[np.ndarray] = []
         physical_names: list[str] = []
 
-        # Solar wind speed persistence lags
+        # Solar wind speed persistence lags  →  new column names
         for td in persistence_td:
             shifted_idx = self.target_dates + td
             avail_physical.append(
@@ -536,9 +544,9 @@ class SolarDataset(Dataset):
                 self.datapoint_values.loc[shifted_idx, 'solar_wind_speed'].values
             )
             lag_hours = -(td.days * 24 + td.seconds // 3600)
-            physical_names.append(f"solar_wind_speed_persistence_{lag_hours}")
+            physical_names.append(f'persistence_speed_{lag_hours}_hours')
 
-        # Monthly sunspot number lags
+        # Monthly sunspot number lags  →  new column names
         for idx in ssn_monthly_idx:
             shifted_idx = self.target_dates + pd.DateOffset(months=idx)
             avail_physical.append(
@@ -547,9 +555,9 @@ class SolarDataset(Dataset):
             data_physical.append(
                 self.datapoint_values.loc[shifted_idx, 'sunspot_number'].values
             )
-            physical_names.append(f"sunspot_number_{-idx}")
+            physical_names.append(f'sunspot_number_{-idx}_months')
 
-        # Heliospheric latitude (4-day lag matches the solar wind travel time)
+        # Heliospheric latitude (4-day lag)  →  new column name
         shifted_idx = self.target_dates - timedelta(days=4)
         avail_physical.append(
             self.available_datapoints.loc[shifted_idx, 'heliospheric_latitude'].values
@@ -557,16 +565,16 @@ class SolarDataset(Dataset):
         data_physical.append(
             self.datapoint_values.loc[shifted_idx, 'heliospheric_latitude'].values
         )
-        physical_names.append('heliospheric_latitude')
+        physical_names.append('heliospheric_latitude_earth')
 
-        # Solar cycle year (no lag needed)
+        # Solar cycle year (no lag)  →  new column name
         avail_physical.append(
             self.available_datapoints.loc[self.target_dates, 'solar_cycle_year'].values
         )
         data_physical.append(
             self.datapoint_values.loc[self.target_dates, 'solar_cycle_year'].values
         )
-        physical_names.append('solar_cycle_year')
+        physical_names.append('year_since_solar_cycle_start')
 
         avail_physical_features = pd.DataFrame(
             np.stack(avail_physical, axis=1),
@@ -579,27 +587,27 @@ class SolarDataset(Dataset):
             columns=physical_names,
         )
 
-        # Image features (4-day lag for solar wind travel time)
+        # Image features (4-day lag)
         avail_images: list[np.ndarray] = []
         data_images: list[np.ndarray] = []
         shifted_idx = self.target_dates - timedelta(days=4)
-        for key in self.channels:
+        for col in self._image_cols:
             avail_images.append(
-                self.available_datapoints.loc[shifted_idx, key].values
+                self.available_datapoints.loc[shifted_idx, col].values
             )
             data_images.append(
-                self.datapoint_values.loc[shifted_idx, key].values
+                self.datapoint_values.loc[shifted_idx, col].values
             )
 
         avail_image_features = pd.DataFrame(
             np.stack(avail_images, axis=1),
             index=self.target_dates,
-            columns=self.channels,
+            columns=self._image_cols,
         )
         data_image_features = pd.DataFrame(
             np.stack(data_images, axis=1),
             index=self.target_dates,
-            columns=self.channels,
+            columns=self._image_cols,
         )
 
         return (
@@ -624,12 +632,11 @@ class SolarDataset(Dataset):
         intervals retain a weight of 1.0.
 
         Calling with ``weights_alpha = 0.0`` (the default) resets all weights
-        to 1.0 (equal weighting). The result is stored in ``self.weights``
-        and also returned.
+        to 1.0 (equal weighting). The result is stored in ``self.weights`` and
+        also returned.
 
         Args:
             weights_alpha: Maximum weight increment above the baseline of 1.
-                Set to 0.0 to disable weighting (all samples equal weight).
             weights_gamma: Exponent controlling the sharpness of the weight
                 profile within each HSS interval.
 
@@ -659,7 +666,7 @@ class SolarDataset(Dataset):
         return self.weights
 
     # ------------------------------------------------------------------
-    # Dataset construction
+    # Dataset construction helpers
     # ------------------------------------------------------------------
 
     def _build_feature_config(
@@ -667,25 +674,22 @@ class SolarDataset(Dataset):
     ) -> tuple[pd.TimedeltaIndex, np.ndarray, list[str]]:
         """Derive feature layout from ``self.physical_input_data``.
 
-        Translates the high-level feature names in ``physical_input_data``
-        into the concrete time deltas, month offsets, and column names needed
-        by ``_assign_features``. Also sets ``self.num_physical_features`` as
-        a side effect.
+        Also sets ``self.num_physical_features`` as a side effect.
 
         Returns:
             Tuple of three items:
 
-            - ``persistence_td`` (pd.TimedeltaIndex): Time deltas for
-              solar wind speed persistence lags.
-            - ``ssn_monthly_idx`` (np.ndarray): Month offsets (negative
-              integers) for sunspot number lags.
-            - ``data_col_names`` (list[str]): Ordered list of all feature
-              column names.
+            - ``persistence_td``: Time deltas for solar wind speed
+              persistence lags.
+            - ``ssn_monthly_idx``: Month offsets (negative integers) for
+              sunspot number lags.
+            - ``data_col_names``: Ordered list of all column names
+              (ml_dataset convention).
         """
-        data_col_names: list[str] = ['solar_wind_speed'] + self.channels
+        # Column order: target | image cols | physical feature cols
+        data_col_names: list[str] = ['solar_wind_speed'] + self._image_cols
         self.num_physical_features = 0
 
-        # Default to empty; populated only when the feature is requested
         persistence_td: pd.TimedeltaIndex = pd.TimedeltaIndex([])
         ssn_monthly_idx: np.ndarray = np.array([], dtype=int)
 
@@ -703,87 +707,145 @@ class SolarDataset(Dataset):
                 self.solar_wind_speed_persistence_cadence,
             )
             data_col_names.extend(
-                [f"solar_wind_speed_persistence_{-i}" for i in col_hour_offsets]
+                [f'persistence_speed_{-i}_hours' for i in col_hour_offsets]
             )
 
         if 'sunspot_number' in self.physical_input_data:
             ssn_monthly_idx = np.arange(-self.sunspot_number_months, 0)
             self.num_physical_features += len(ssn_monthly_idx)
             data_col_names.extend(
-                [f"sunspot_number_{-i}" for i in ssn_monthly_idx]
+                [f'sunspot_number_{-i}_months' for i in ssn_monthly_idx]
             )
 
         if 'heliospheric_latitude' in self.physical_input_data:
             self.num_physical_features += 1
-            data_col_names.append('heliospheric_latitude')
+            data_col_names.append('heliospheric_latitude_earth')
 
         if 'solar_cycle_year' in self.physical_input_data:
             self.num_physical_features += 1
-            data_col_names.append('solar_cycle_year')
+            data_col_names.append('year_since_solar_cycle_start')
 
         return persistence_td, ssn_monthly_idx, data_col_names
+
+    def _resolve_image_paths(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Convert relative image paths (ml_dataset style) to absolute paths.
+
+        Relative paths such as ``aia_171/2010/05/171_2010-05-28_00:00.npy``
+        are resolved against ``self.solar_image_dir``.  Absolute paths are
+        left unchanged so that a ``feature_values.csv`` that already stores
+        absolute paths works transparently.
+
+        Args:
+            df: DataFrame containing image path columns.
+
+        Returns:
+            The same DataFrame with image columns updated to absolute paths.
+        """
+        for col in self._image_cols:
+            if col not in df.columns:
+                continue
+            first_valid = df[col].dropna().iloc[0] if not df[col].dropna().empty else ''
+            if first_valid and not os.path.isabs(first_valid):
+                df.loc[:, col] = df[col].apply(
+                    lambda p: str(self.solar_image_dir / p) if isinstance(p, str) and p else p
+                )
+        return df
+
+    def _to_relative_image_paths(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Convert absolute image paths to paths relative to ``solar_image_dir``.
+
+        Used before saving ``ml_dataset.csv`` so the file is portable across
+        machines with different base directories.
+
+        Args:
+            df: DataFrame with absolute image path columns.
+
+        Returns:
+            A copy of the DataFrame with image columns converted to relative
+            paths.
+        """
+        df = df.copy()
+        base = str(self.solar_image_dir)
+        for col in self._image_cols:
+            if col not in df.columns:
+                continue
+            df[col] = df[col].apply(
+                lambda p: os.path.relpath(p, base) if isinstance(p, str) and p else p
+            )
+        return df
 
     def _load_or_compute_features(
         self,
         data_col_names: list[str],
         persistence_td: pd.TimedeltaIndex,
         ssn_monthly_idx: np.ndarray,
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """Load cached feature arrays, or compute them from raw data if unavailable.
+    ) -> pd.DataFrame:
+        """Load feature values from cache or compute them from raw data.
 
-        Attempts to read ``feature_availability.csv`` and
-        ``feature_values.csv`` from ``ml_data_dir``. If the cache is absent,
-        unreadable, or does not match the current feature configuration, falls
-        back to calling ``_check_available_data`` and ``_assign_features`` to
-        rebuild the tables from scratch. The recomputed tables are written
-        back to the cache if ``precompute_and_reuse_dataset`` is ``True``.
+        Tries sources in this priority order:
+
+        1. ``ml_data_dir / 'ml_dataset.csv'`` (relative image paths, resolved
+           against ``solar_image_dir`` at load time)
+        2. Full from-scratch scan via ``_check_available_data`` +
+           ``_assign_features``
+
+        After a from-scratch scan the result is saved as ``ml_dataset.csv``
+        (with relative image paths) when ``precompute_and_reuse_dataset`` is
+        ``True``.
 
         Args:
-            data_col_names: Expected column names, used to validate that
-                cached files match the current feature configuration.
-            persistence_td: Time deltas for solar wind speed persistence lags.
-            ssn_monthly_idx: Month offsets for sunspot number lags.
+            data_col_names: Expected column names (ml_dataset convention),
+                used to validate cached files.
+            persistence_td: Time deltas for persistence lags.
+            ssn_monthly_idx: Month offsets for sunspot lags.
 
         Returns:
-            Tuple of two DataFrames:
-
-            - ``avail_features``: Boolean availability flags for each feature
-              and timestep.
-            - ``vals_features``: Feature values corresponding to
-              ``avail_features``.
+            ``vals_features``: DataFrame of feature values with all available
+            timesteps as rows and ``data_col_names`` as columns.  Image path
+            columns contain *absolute* paths ready for ``np.load``.
         """
-        avail_features = None
-        vals_features = None
+        vals_features: pd.DataFrame | None = None
+        expected_cols = pd.Index(data_col_names)
 
-        if self.precompute_and_reuse_dataset:
+        # ------------------------------------------------------------------ #
+        # 1. Try ml_dataset.csv
+        # ------------------------------------------------------------------ #
+        ml_dataset_path = self.ml_data_dir / 'ml_dataset.csv'
+        if ml_dataset_path.exists():
             try:
-                avail_features = pd.read_csv(
-                    self.ml_data_dir / 'feature_availability.csv',
-                    index_col=0,
-                    parse_dates=[0],
-                )
-                vals_features = pd.read_csv(
-                    self.ml_data_dir / 'feature_values.csv',
-                    index_col=0,
-                    parse_dates=[0],
-                )
-                expected_cols = pd.Index(data_col_names)
-                if (
-                    not avail_features.columns.equals(expected_cols)
-                    or not vals_features.columns.equals(expected_cols)
-                ):
-                    if self.logger is not None:
+                vals = pd.read_csv(ml_dataset_path, index_col=0, parse_dates=[0])
+                # Select only the columns needed for this configuration
+                missing = expected_cols.difference(vals.columns)
+                if missing.empty:
+                    vals_features = vals[data_col_names]
+                    # Replace missing image paths by NaN
+                    vals_features.loc[:, self._image_cols] = (
+                        vals_features[self._image_cols].replace('0.0', float('nan'))
+                    )
+                    vals_features = self._resolve_image_paths(vals_features)
+                    if self.logger is not None and self.rank == 0:
+                        self.logger.info("Loaded dataset from 'ml_dataset.csv'.")
+                else:
+                    if self.logger is not None and self.rank == 0:
                         self.logger.warning(
-                            'Saved features do not coincide with current feature '
-                            'configuration. Features are recomputed.'
+                            f"'ml_dataset.csv' is missing columns {missing.tolist()}. "
+                            "Falling back to legacy or from-scratch build."
                         )
-                    avail_features = None
-                    vals_features = None
-            except (OSError, pd.errors.ParserError, ValueError):
-                avail_features = None
-                vals_features = None
+            except (OSError, pd.errors.ParserError, ValueError) as exc:
+                if self.logger is not None and self.rank == 0:
+                    self.logger.warning(
+                        f"Could not read 'ml_dataset.csv' ({exc}). "
+                        "Falling back to legacy or from-scratch build."
+                    )
 
-        if avail_features is None or vals_features is None:
+        # ------------------------------------------------------------------ #
+        # 2. From-scratch scan
+        # ------------------------------------------------------------------ #
+        if vals_features is None:
+            if self.logger is not None and self.rank == 0:
+                self.logger.info(
+                    "No valid cache found. Building dataset from scratch…"
+                )
             self._check_available_data()
 
             self.target_dates = pd.date_range(
@@ -811,40 +873,54 @@ class SolarDataset(Dataset):
                 [target_values, vals_image_features, vals_physical_features], axis=1
             )
 
-            if self.precompute_and_reuse_dataset:
-                avail_features.to_csv(
-                    self.ml_data_dir / 'feature_availability.csv', index=True
-                )
-                vals_features.to_csv(
-                    self.ml_data_dir / 'feature_values.csv', index=True
-                )
+            # Keep only rows where every feature is available before saving
+            all_available = np.all(avail_features.values, axis=1)
+            vals_features = vals_features.loc[all_available, :]
 
-        return avail_features, vals_features
+            if self.precompute_and_reuse_dataset:
+                save_df = self._to_relative_image_paths(vals_features)
+                save_df.to_csv(ml_dataset_path, index=True)
+                if self.logger is not None and self.rank == 0:
+                    self.logger.info(
+                        f"Saved dataset to '{ml_dataset_path}' "
+                        "(relative image paths)."
+                    )
+
+        return vals_features
 
     def _create_dataset(self) -> None:
-        """Assemble the final dataset by combining features and filtering to complete samples.
+        """Assemble the final dataset by combining features and filtering complete samples.
 
         Orchestrates the full dataset construction pipeline:
 
         1. Derives feature layout via ``_build_feature_config``.
-        2. Loads or computes feature availability and value tables via
-           ``_load_or_compute_features``.
-        3. Retains only timesteps where every feature is available.
-        4. Populates all public dataset attributes (``data``, ``target``,
-           ``target_dates``, ``physical_features``, ``missing_dates``).
+        2. Loads or computes feature values via ``_load_or_compute_features``.
+        3. Filters to rows where all features are non-null (only relevant when
+           loading from a cached file that covers a superset of the interval).
+        4. Populates all public dataset attributes.
         """
         self.num_images = len(self.channels)
         persistence_td, ssn_monthly_idx, data_col_names = self._build_feature_config()
-        avail_features, vals_features = self._load_or_compute_features(
+        vals_features = self._load_or_compute_features(
             data_col_names, persistence_td, ssn_monthly_idx
         )
 
-        # Keep only timesteps where every feature is available
-        all_available = np.all(avail_features.values, axis=1)
-        data = vals_features.loc[all_available, :]
+        # When loading from a cache file that spans the full dataset interval
+        # we may need to restrict to the requested interval and drop any rows
+        # with missing values (e.g. the published dataset may include rows
+        # that don't have all channels requested here).
+        mask_interval = (
+            (vals_features.index >= self.dataset_interval[0])
+            & (vals_features.index <= self.dataset_interval[1])
+        )
+        data = vals_features.loc[mask_interval].dropna()
 
         self.target = data.iloc[:, 0]
-        self.physical_features = data.iloc[:, -self.num_physical_features:]
+        self.physical_features = (
+            data.iloc[:, -self.num_physical_features:]
+            if self.num_physical_features > 0
+            else pd.DataFrame(index=data.index, dtype='float32')
+        )
         self.target_dates = self.target.index
         self.target_values = self.target.values
         self.data = data
@@ -900,9 +976,6 @@ class TransformedDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         """Return a single scaled sample by integer index.
-
-        Retrieves the sample from the underlying dataset, then applies
-        any configured scalers to the physical features and/or target.
 
         Args:
             idx: Integer index into the dataset.

@@ -68,7 +68,7 @@ dataset:
 
   # Scalar features concatenated with the image embedding before the
   # prediction heads
-  physical_features:
+  physical_features: # use [] if all physical features should be removed
     - solar_wind_speed_persistence
     - sunspot_number
     - solar_cycle_year

@@ -33,17 +33,17 @@ PROSWIN is a probabilistic deep-learning model for forecasting the solar wind sp
 
 ## Table of Contents
 
-1. [Model architecture](#model-architecture)
-2. [Installation](#installation)
-3. [Dataset preparation](#dataset-preparation)
-4. [Repository structure](#repository-structure)
-5. [Reproducing the experiments](#reproducing-the-experiments)
-6. [Notes for running on multiple GPUs](#notes-for-running-on-multiple-gpus)
-7. [Configuration reference](#configuration-reference)
+1. [Model Architecture](#model-architecture)
+2. [Getting Started](#getting-started)
+3. [Dataset Preparation](#dataset-preparation)
+4. [Repository Structure](#repository-structure)
+5. [Reproducing he Experiments](#reproducing-the-experiments)
+6. [Notes for Running on Multiple GPUs](#notes-for-running-on-multiple-gpus)
+7. [Configuration Reference](#configuration-reference)
 
 ---
 
-## Model architecture
+## Model Architecture
 
 <div align="center">
   <img src="assets/model_pipeline.png" alt="Alt Text">
@@ -84,45 +84,83 @@ Network outputs are in a standardised log-space. Inverting the scaler and re-par
 
 ---
 
-## Installation
+## Getting Started
 
-> **Note:** This project uses [uv](https://github.com/astral-sh/uv) for dependency management. Full `pyproject.toml` and `uv.lock` will be provided in the final release.
+This project uses [uv](https://docs.astral.sh/uv/) for extremely fast Python package and project management.
 
-### Prerequisites
-- Python ≥ 3.10
+### 0. Hardware Prerequisites
+
 - For training: CUDA-capable GPU (strongly recommended; CPU-only runs are supported but slow)
 - For inference or evaluation: CPU is sufficient
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) installed
 
-### Steps
+### 1. Install uv
+
+If you don't have uv installed yet, install it:
+
+#### Linux / MacOS
 
 ```bash
-# 1. Clone the repository
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+#### Windows (Powershell)
+
+```bash
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+#### Verify the installation:
+
+```bash
+uv --version
+```
+
+### 2. Project Setup
+
+After cloning the repository, navigate to the project directory and sync the dependencies. 
+This will automatically create a virtual environment (`.venv`) and install all required packages from the `uv.lock` file.
+
+```bash
+# Clone the repository
 git clone https://github.com/DanielCollin96/proswin.git
 cd proswin
 
-# 2. Create a virtual environment and install all dependencies
+# Create a virtual environment and install all dependencies
 uv sync
-
-# 3. Activate the environment
-source .venv/bin/activate   # Linux / macOS
-# .venv\Scripts\activate    # Windows
 ```
-
 The package is installed in editable mode from `src/`, so `import proswin` resolves correctly from any working directory.
 
-### Optional: Weights & Biases experiment tracking
+
+### 3. Running the Project
+
+You do not need to activate the virtual environment manually. 
+Use `uv run` to execute scripts within the project context:
 
 ```bash
-uv add wandb
+uv run <script>.py
+```
+
+### 4. Optional: Weights & Biases experiment tracking
+
+Log into your Weights & Biases account:
+
+```bash
 wandb login
 ```
 
 Then set `wandb_project: your_project_name` in `configs/config.yaml`. Leave it blank or omit to disable W&B entirely.
 
+### 5. Optional: Adding Dependencies
+
+To add a new package to the project:
+
+```bash
+uv add <package-name>
+```
+
 ---
 
-## Dataset preparation
+## Dataset Preparation
 
 The dataset used in the paper is available from GFZ Data Services here: https://doi.org/10.5880/GFZ.OJSJ.2026.001
 
@@ -171,7 +209,7 @@ Open `configs/config.yaml` and set each entry under `paths:` to the correspondin
 
 ---
 
-## Repository structure
+## Repository Structure
 
 ```
 proswin/
@@ -203,7 +241,7 @@ proswin/
     │   ├── hss_finder.py              # HSS peak detection and association
     │   ├── baselines.py               # Climatology, persistence, CH regression
     │   ├── model_comparison.py        # Scatter-plot comparison figures
-    │   └── plotter.py                 # Time-series and CRPS plotting
+    │   └── plotter.py                 # Plotting functionality for model analysis
     └── utils/
         ├── configurator.py            # Config loader and DDP initialisation
         └── interpolation_dates.py     # Gap detection and linear interpolation
@@ -211,7 +249,7 @@ proswin/
 
 ---
 
-## Reproducing the experiments
+## Reproducing the Experiments
 
 All scripts read exclusively from `configs/config.yaml`. No command-line arguments are used. Edit the config file before each run.
 
@@ -227,7 +265,7 @@ Edit `configs/config.yaml`:
 ### Step 2 — Run cross-validated training (primary experiment)
 
 ```bash
-python scripts/cross_validation.py
+uv run scripts/cross_validation.py
 ```
 
 This runs the complete pipeline:
@@ -247,7 +285,7 @@ This compares all model variants tested in the paper, if the predictions have be
 It also computes the baseline predictions and compares our best model the baselines and to the literature models.
 
 ```bash
-python scripts/compare_models.py
+uv run scripts/compare_models.py
 ```
 
 ### Step 3 — (Optional) Single-split training run
@@ -256,7 +294,7 @@ This runs a single training iteration on a fixed train/val/test split.
 Edit `scripts/train_single_split.py` and replace `'train_dates'`, `'val_dates'`, and `'test_dates'` with your the desired training, validation and test dates, respectively.
 
 ```bash
-python scripts/train_single_split.py
+uv run scripts/train_single_split.py
 ```
 
 ### Step 4 — (Optional) Predict with a trained model
@@ -264,22 +302,22 @@ python scripts/train_single_split.py
 This computes the predictions for a saved model. Edit `scripts/predict.py` and replace the model path with the desired model.
 
 ```bash
-python scripts/predict.py
+uv run scripts/predict.py
 ```
 
 ### Step 5 — (Optional) Evaluate predictions
 
-This evaluates saved predictions. Edit `scripts/evaluate_predictions.py` and replace `'test_model'` with your model name.
+This evaluates saved predictions and reproduces all plots from the paper. Edit `scripts/evaluate_predictions.py` and replace `'test_model'` with your model name.
 
 ```bash
-python scripts/evaluate_predictions.py
+uv run scripts/evaluate_predictions.py
 ```
 
 
 ---
 
 
-## Notes for running on multiple GPUs
+## Notes for Running on Multiple GPUs
 
 - `ConfigLoader` reads `RANK`, `LOCAL_RANK`, and `WORLD_SIZE` from the environment automatically. No code changes are needed between single- and multi-GPU runs beyond the config flag.
 - Set `training.use_multiple_gpus: false` for single-GPU or CPU-only runs.
@@ -289,7 +327,7 @@ python scripts/evaluate_predictions.py
 
 ---
 
-## Configuration reference
+## Configuration Reference
 
 All settings and hyperparameters are configured in `configs/config.yaml`. The file is self-documenting; the table below lists the most commonly changed fields.
 

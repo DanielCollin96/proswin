@@ -7,9 +7,7 @@ from proswin.predictions import (
     PointPrediction,
     SolarWindPrediction,
 )
-
-if TYPE_CHECKING:
-    from proswin.evaluation.hss_finder import HSSFinder
+from proswin.evaluation.hss_finder import HSSFinder
 
 
 class PredictionEvaluator:
@@ -50,7 +48,7 @@ class PredictionEvaluator:
         self,
         prediction: SolarWindPrediction,
         observations: pd.Series,
-        hss_finder: "HSSFinder | None" = None,
+        hss_finder: HSSFinder | None = None,
         interpolation_dates: pd.DatetimeIndex | None = None,
     ) -> None:
         if not prediction.index.equals(observations.index):
@@ -140,6 +138,90 @@ class PredictionEvaluator:
 
         return float(pred.get_crps(obs).mean())
 
+    def calibration_errors(
+            self,
+            pred: SolarWindPrediction | None = None,
+            obs: pd.Series | None = None,
+            quantile_levels: np.ndarray | None = None,
+    ) -> pd.Series:
+        """Compute summary calibration errors between nominal and empirical coverage.
+
+        For each nominal confidence level q, the symmetric q-prediction
+        interval is ``[Q((1-q)/2), Q((1+q)/2)]``.  The empirical coverage is
+        the fraction of observations that fall inside this interval.  The
+        signed error ``q - empirical_coverage`` measures miscalibration:
+        positive values indicate under-coverage (intervals too narrow);
+        negative values indicate over-coverage (intervals too wide).
+
+        The signature mirrors :meth:`rmse` and :meth:`crps`: when both
+        ``pred`` and ``obs`` are ``None``, the instance's stored prediction
+        and observations are used.  Passing an explicit ``pred`` / ``obs``
+        pair evaluates calibration on an arbitrary slice — for example, the
+        HSS peak subset used by :meth:`evaluate`.
+
+        Returns ``NaN`` for all metrics when called on a ``PointPrediction``,
+        because point forecasts do not define a predictive distribution.
+
+        Args:
+            pred: Prediction to evaluate.  If ``None``, uses the stored
+                prediction.
+            obs: Observations to compare against.  If ``None``, uses the
+                stored observations.
+            quantile_levels: 1-D array of nominal coverage probabilities in
+                (0, 1).  Defaults to 99 evenly spaced values from 0.01 to
+                0.99.
+
+        Returns:
+            Series with index
+            ``['mean_calib_error', 'mean_abs_calib_error', 'max_abs_calib_error']``.
+
+        Raises:
+            RuntimeError: If exactly one of ``pred`` / ``obs`` is provided.
+        """
+        if pred is None and obs is None:
+            pred = self._prediction
+            obs = self._observations
+        elif (pred is None) != (obs is None):
+            raise RuntimeError(
+                "Either both 'pred' and 'obs' must be provided, "
+                "or both must be None."
+            )
+
+        # PointPrediction has no predictive distribution — return NaN to keep
+        # the metrics Series shape consistent with probabilistic predictions.
+        if isinstance(pred, PointPrediction):
+            return pd.Series(
+                {
+                    "mean_calib_error": np.nan,
+                    "mean_abs_calib_error": np.nan,
+                    "max_abs_calib_error": np.nan,
+                }
+            )
+
+        if quantile_levels is None:
+            quantile_levels = np.linspace(0.01, 0.99, 99)
+
+        empirical_coverage = []
+        for q in quantile_levels:
+            lower = pred.get_quantiles((1 - q) / 2)
+            upper = pred.get_quantiles((1 + q) / 2)
+            covered = float(
+                np.mean(
+                    (obs.values >= lower.values) & (obs.values <= upper.values)
+                )
+            )
+            empirical_coverage.append(covered)
+
+        errors = quantile_levels - np.array(empirical_coverage)
+
+        return pd.Series(
+            {
+                "mean_calib_error": float(np.mean(errors)),
+                "mean_abs_calib_error": float(np.mean(np.abs(errors))),
+                "max_abs_calib_error": float(np.max(np.abs(errors))),
+            }
+        )
+
     def evaluate(self) -> pd.Series | tuple[pd.Series, pd.DataFrame]:
         """Compute all applicable metrics and return results.
 
@@ -159,6 +241,8 @@ class PredictionEvaluator:
             "rmse": self.rmse(),
             "crps": self.crps(),
         }
+        calib = self.calibration_errors()
+        metrics.update(calib.to_dict())
 
         if self._hss_finder is not None:
             pred_peaks, obs_peaks = self._get_hss_peaks()
@@ -167,6 +251,11 @@ class PredictionEvaluator:
             )
             metrics["peak_rmse"] = self.rmse(pred_associated_peaks, obs_associated_peaks)
             metrics["peak_crps"] = self.crps(pred_associated_peaks, obs_associated_peaks)
+
+            peak_calib = self.calibration_errors(
+                pred_associated_peaks, obs_associated_peaks
+            )
+            metrics.update({f"peak_{k}": v for k, v in peak_calib.items()})
 
             event_metrics = self._hss_binary_event_metrics()
             metrics = metrics | event_metrics.to_dict()
@@ -177,6 +266,7 @@ class PredictionEvaluator:
             metrics["ps_crps"] = self._prediction_score(
                 metrics["crps"], metrics["peak_crps"]
             )
+
 
         if not isinstance(self._prediction, PointPrediction):
             brier_score_table = self._threshold_brier_scores([450, 500, 600, 700])

@@ -44,7 +44,7 @@ def main() -> None:
     ``config.paths['evaluation'] / 'literature_comparison.csv'``.
     """
     project_root = pathlib.Path(__file__).parent.parent
-    config = ConfigLoader(project_root, enable_logging=False, initialize_ddp=False)
+    config = ConfigLoader(project_root, enable_logging=True, initialize_ddp=False)
 
     # Model groups and channel configurations to evaluate.
     groups = ['image_only', 'full_model']
@@ -116,6 +116,9 @@ def main() -> None:
             results_dict[model] = results[0]
 
         model_results_table = pd.DataFrame(results_dict)
+        model_results_table.transpose().to_csv(
+            config.paths['evaluation'] / f'{group}_comparison.csv'
+        )
         config.logger.info("Results for group '%s':\n%s", group, model_results_table)
         comp_plotter = ComparisonPlotter(
             model_results_table, config.paths['figures'], save_label=group
@@ -179,7 +182,7 @@ def main() -> None:
     # Literature models are stored as point forecasts; wrap each with a
     # constant Normal uncertainty from an 11-year pre-study period.
     literature_models = pd.read_csv(
-        config.paths['predictions'] / 'literature_models.csv',
+        config.paths['ml_data_dir'] / 'literature_models.csv',
         index_col=0,
         parse_dates=[0],
     )
@@ -217,7 +220,6 @@ def main() -> None:
     model_results_table.transpose().to_csv(
         config.paths['evaluation'] / 'literature_comparison.csv'
     )
-    print(model_results_table)
     comp_plotter = ComparisonPlotter(
         model_results_table, config.paths['figures'], save_label='literature'
     )

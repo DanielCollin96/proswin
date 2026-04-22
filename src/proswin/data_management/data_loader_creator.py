@@ -31,7 +31,8 @@ class DataLoaderCreator:
             training loader for multi-GPU (DDP) training. Default is False.
 
     Attributes:
-        input_scaler: ``StandardScaler`` fitted on training physical features.
+        input_scaler: ``StandardScaler`` fitted on training physical features,
+            or ``None`` in image-only mode.
         output_scaler: ``DistributionTransformer`` fitted on training targets.
     """
 
@@ -218,7 +219,7 @@ def get_prediction_loader(
 def _fit_scalers(
     dataset: SolarDataset,
     train_dates: pd.DatetimeIndex,
-) -> tuple[StandardScaler, DistributionTransformer]:
+) -> tuple[StandardScaler | None, DistributionTransformer]:
     """Fit input and output scalers on training data only.
 
     Args:
@@ -233,12 +234,19 @@ def _fit_scalers(
         - ``output_scaler``: ``DistributionTransformer`` fitted on the target
           values of the training split.
     """
-    X_train = dataset.physical_features.loc[train_dates].values
     y_train = dataset.target.loc[train_dates].values
 
-    input_scaler = StandardScaler()
+    # When no physical features are configured (images-only mode) there is
+    # nothing to scale; leave input_scaler as None so TransformedDataset
+    # passes the empty feature tensor through unchanged.
+    if dataset.physical_features.shape[1] > 0:
+        X_train = dataset.physical_features.loc[train_dates].values
+        input_scaler: StandardScaler | None = StandardScaler()
+        input_scaler.fit(X_train)
+    else:
+        input_scaler = None
+
     output_scaler = DistributionTransformer()
-    input_scaler.fit(X_train)
     output_scaler.fit(y_train)
 
     return input_scaler, output_scaler
