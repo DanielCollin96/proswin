@@ -165,22 +165,15 @@ To reuse/evaluate trained models or predictions, copy models and predictions int
 
 ```
 <results_root>/
-├── models/                     # SDO/AIA EUV images (.npy, one file per hour)
-│   ├── full_model/                   # AIA 171 Å channel
-│   │   └── <model>_<fold>.csv
-│   ├── image_only/                   # AIA 171 Å channel
-│   │   └── <model>_<fold>.csv
-├── predictions/        
-│   ├── ml_dataset.csv         # Feature values
-│   └── literature_models.csv  # Needed for literature comparison
-├── physical_features/         # Scalar time series (CSV)
-│   ├── solar_wind_speed.csv   # Needed for baseline model comparison
-│   ├── sunspot_number.csv     # Needed for solar cycle plot
-│   └── ch_area.csv            # Needed for baseline model comparison
-└── solar_events/              # Event catalogues (CSV)
-    ├── cme_list.csv
-    ├── hss_list.csv
-    └── enhancement_list.csv
+├── models/                     # Trained models
+│   ├── full_model/             # Models trained with all available features for each CV fold      
+│   │   └── <model>_<fold>.pth
+│   ├── image_only/             # Models trained without physical features for each CV fold
+│   │   └── <model>_<fold>.pth
+└── predictions/                # Computed predictions
+    ├── <model>_full_model.csv  # Predictions of full models agggregated over all CV folds   
+    └── <model>_image_only.csv  # Predictions of image-only models agggregated over all CV folds  
+
 
 ```
 
