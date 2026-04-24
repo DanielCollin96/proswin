@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -71,20 +71,27 @@ class SolarWindSpeedLoader:
 
     Reads hourly solar wind speed measurements from a pre-formatted CSV file
     and returns a cleaned, gap-interpolated time series suitable for use as
-    a model feature or prediction target.
+    a model feature or prediction target. If the primary file is not found,
+    falls back to parsing a raw OMNI data file.
 
     Args:
-        data_folder: Directory containing ``solar_wind_speed.csv``.
+        data_folder: Directory containing ``solar_wind_speed.csv`` and,
+            optionally, ``omni_sws.lst`` as a fallback data source.
 
     Attributes:
-        data_file (Path): Full path to the solar wind speed CSV.
+        data_file (Path): Full path to the primary solar wind speed CSV.
+        fallback_data_file (Path): Full path to the OMNI fallback ``.lst`` file.
     """
 
     def __init__(self, data_folder: Path) -> None:
         self.data_file = data_folder / 'solar_wind_speed.csv'
+        self.fallback_data_file = data_folder / 'omni_sws.lst'
 
     def load_data(self) -> pd.Series:
-        """Load solar wind speed from CSV, resample to hourly, and interpolate short gaps.
+        """Load solar wind speed, resample to hourly, and interpolate short gaps.
+
+        Reads from ``solar_wind_speed.csv`` if available, otherwise falls back
+        to parsing the raw OMNI file via :meth:`read_omni`.
 
         Data gaps of up to 30 consecutive hours are filled by linear time
         interpolation; longer gaps remain as ``NaN`` to avoid introducing
@@ -94,18 +101,20 @@ class SolarWindSpeedLoader:
             Hourly solar wind speed series named ``'solar_wind_speed'``.
 
         Raises:
-            NotImplementedError: If ``solar_wind_speed.csv`` is not found.
-                An OMNI raw-data fallback is not currently implemented.
+            FileNotFoundError: If neither ``solar_wind_speed.csv`` nor
+                ``omni_sws.lst`` is found in the data folder.
         """
-        try:
+        if self.data_file.exists():
             solar_wind_speed = pd.read_csv(
                 self.data_file, index_col=0, parse_dates=[0]
             ).squeeze()
-        except FileNotFoundError as exc:
-            raise NotImplementedError(
-                f"OMNI raw-data fallback is not implemented. "
-                f"Ensure '{self.data_file}' exists."
-            ) from exc
+        else:
+            if not self.fallback_data_file.exists():
+                raise FileNotFoundError(
+                    f"Neither '{self.data_file}' nor '{self.fallback_data_file}' "
+                    f"were found. Provide at least one solar wind speed data file."
+                )
+            solar_wind_speed = self.read_omni()
 
         solar_wind_speed.sort_index(inplace=True)
         solar_wind_speed = solar_wind_speed.resample('60min').asfreq()
@@ -114,6 +123,35 @@ class SolarWindSpeedLoader:
         solar_wind_speed.name = 'solar_wind_speed'
         return solar_wind_speed
 
+    def read_omni(self) -> pd.Series:
+        """Parse a raw OMNI solar wind speed file in fixed-width list format.
+
+        Expects columns in the order: year, day-of-year, hour, speed [km/s].
+        The OMNI fill value 9999.0 is replaced with ``NaN``.
+
+        Returns:
+            Solar wind speed series indexed by datetime, with missing values
+            linearly interpolated.
+        """
+        raw = pd.read_table(
+            self.fallback_data_file, header=None, delim_whitespace=True
+        )
+
+        years = raw.iloc[:, 0].astype(int)
+        days = raw.iloc[:, 1].astype(int)
+        hours = raw.iloc[:, 2].astype(int)
+        sws = raw.iloc[:, 3].astype(float)
+
+        # Replace OMNI fill value with NaN
+        sws[sws == 9999.0] = np.nan
+
+        # Reconstruct datetime index from year + day-of-year + hour
+        index = [
+            datetime(year, 1, 1, hour) + timedelta(days=int(day) - 1)
+            for year, day, hour in zip(years, days, hours)
+        ]
+
+        return pd.Series(sws.values, index=index).interpolate()
 
 class SunspotNumberLoader:
     """Load and preprocess monthly sunspot number data.

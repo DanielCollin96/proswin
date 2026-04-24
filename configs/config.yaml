@@ -40,9 +40,7 @@ paths:
   # Solar event catalogues; expects:
   # cme_list.csv, hss_list.csv, enhancement_list.csv
   solar_event_dir: "data/solar_events"
-  # Scalar physical feature time series; expects:
-  # solar_wind_speed.csv, sunspot_number.csv, heliospheric_latitude.csv,
-  # ch_area.csv
+  # Scalar physical feature time series
   physical_features_dir: "data/physical_features"
   # Pre-processed ML-ready tensors written by SolarDataset on the first run
   # and reloaded on subsequent runs (see precompute_and_reuse_dataset below)
@@ -138,7 +136,7 @@ training:
 
   # Path (relative to project root) to a pre-trained mu checkpoint.
   # Only loaded when fit_prediction_head is [sigma].
-  trained_mu_model_file: "data/models/171-211.pth"
+  trained_mu_model_file:
 
   # Set to true when running on a multi-GPU node. Batches are distributed
   # across available GPUs via PyTorch Distributed Data Parallel (DDP).
@@ -147,7 +145,7 @@ training:
   use_multiple_gpus: false
 
   # Weights & Biases project name for experiment tracking
-  wandb_project: proswin
+  wandb_project: #proswin
 
   train_test_scheme: cross_validation
 
@@ -163,7 +161,7 @@ training:
     gap_days: 90
 
   # Save a checkpoint whenever validation loss improves during training
-  save_best_model_after_each_epoch: true
+  save_best_model_after_each_epoch: false
 
   # --- Mu head (mean prediction) ---
   mu:

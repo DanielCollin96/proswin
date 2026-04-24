@@ -10,4 +10,5 @@ results/
 wandb/
 logs/
 data/
+scripts/run.sh
 readme_notes.md

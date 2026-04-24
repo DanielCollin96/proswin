@@ -105,7 +105,7 @@ class SolarSwinTransformer(nn.Module):
         self.sigma_head_hidden_layer_size = sigma_head_hidden_layer_size
         self.mu_head_dropout = mu_head_dropout
         self.sigma_head_dropout = sigma_head_dropout
-        self.min_sigma: float = 1e-6
+        self.min_sigma: float = 1e-1
         self.point_prediction = point_prediction
         self.distribution_transformer = distribution_transformer
         self.physical_feature_scaler = physical_feature_scaler
@@ -204,15 +204,25 @@ class SolarSwinTransformer(nn.Module):
             sigma_bound = self._get_sigma_bound(output_mu)
             output_sigma = torch.minimum(output_sigma, sigma_bound)
 
+        # Applying lower bound after all clamping prevents NLL explosion
+        # when sigma_bound itself is very small (large mu batches),
+        # so avoiding to let a small output_sigma slip through
+        output_sigma = output_sigma.clamp(min=self.min_sigma)
+
         # Bias correction: ensures E[back-transformed prediction] = exp(mu)
         # For a log-normal, E[X] = exp(mu + sigma^2/2) in the *original* space,
         # so mu must be shifted by -scale * sigma^2 / 2 in normalised space.
-        dist_trafo_scale = torch.tensor(
-            self.distribution_transformer.target_scaler.scale_,
-            dtype=output_sigma.dtype,
-            device=output_sigma.device,
-        )
-        output_mu = output_mu - dist_trafo_scale * output_sigma.pow(2) / 2
+        # Only apply bias correction during inference, not during training.
+        # During training the NLL is computed in normalised space where targets
+        # have no correction applied, so correcting mu here would make the loss
+        # try to compensate via sigma, destabilising training.
+        if not self.training:
+            dist_trafo_scale = torch.tensor(
+                self.distribution_transformer.target_scaler.scale_,
+                dtype=output_sigma.dtype,
+                device=output_sigma.device,
+            )
+            output_mu = output_mu - dist_trafo_scale * output_sigma.pow(2) / 2
 
         return output_mu, output_sigma
 
@@ -351,7 +361,7 @@ class SolarSwinTransformer(nn.Module):
         # Convert shape (in original space) back to normalised sigma units
         sigma_bound = torch.maximum(
             max_shape / dist_trafo_scale,
-            torch.tensor(1e-4, dtype=dtype, device=device),  # floor for stability
+            torch.tensor(5e-2, dtype=dtype, device=device),  # floor for stability
         )
 
         return sigma_bound
@@ -441,6 +451,41 @@ def load_model(path: str | Path) -> SolarSwinTransformer:
         use_pretrained_image_encoder_weights=False,
         distribution_transformer=distribution_transformer,
         physical_feature_scaler=physical_feature_scaler,
+        **hparams,
+    )
+
+    model.load_state_dict(checkpoint["state_dict"])
+    model.eval()  # disables dropout and sets BatchNorm to inference mode
+
+    return model
+
+def load_model_without_scaler(path: str | Path) -> SolarSwinTransformer:
+
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"No checkpoint found at '{path}'.")
+
+    # weights_only=False is required because DistributionTransformer is pickled
+    checkpoint = torch.load(path, weights_only=False)
+
+    for key in ("hyperparameters", "state_dict", "distribution_transformer"):
+        if key not in checkpoint:
+            raise KeyError(
+                f"Checkpoint at '{path}' is missing key '{key}'."
+            )
+
+    hparams: dict = checkpoint["hyperparameters"]
+    distribution_transformer: DistributionTransformer = (
+        checkpoint["distribution_transformer"]
+    )
+    #physical_feature_scaler= checkpoint["physical_feature_scaler"]
+
+    # Rebuild the architecture — pretrained_backbone=False skips the internet
+    # download since weights come entirely from the saved state dict
+    model = SolarSwinTransformer(
+        use_pretrained_image_encoder_weights=False,
+        distribution_transformer=distribution_transformer,
+        physical_feature_scaler=None,
         **hparams,
     )
 

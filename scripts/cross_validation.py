@@ -70,6 +70,7 @@ def main() -> None:
             cv_split_missing=cv_split_missing,
             config=config,
             device=device,
+            use_multiple_gpus=config.train_config['use_multiple_gpus'],
             logger=config.logger,
         )
         runner.run()

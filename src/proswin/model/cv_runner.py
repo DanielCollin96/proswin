@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import torch.distributed as dist
 
 try:
     import wandb
@@ -53,6 +54,8 @@ class CrossValidationRunner:
             ``HSSFinder`` to fill gaps before peak detection.
         config: Loaded configuration object.
         device: Device to run training on.
+        use_multiple_gpus: If the model is run in multi-GPU set up.
+            Default ``False``.
         logger: Logger for progress messages. Falls back to the module
             logger if None.
 
@@ -68,8 +71,12 @@ class CrossValidationRunner:
             cv_split_missing: dict,
             config: ConfigLoader,
             device: torch.device,
+            use_multiple_gpus: bool = False,
             logger: logging.Logger | None = None,
     ) -> None:
+        self._is_primary: bool = (
+                not use_multiple_gpus or dist.get_rank() == 0
+        )
         self._dataset = dataset
         self._cv_split = cv_split
         self._cv_split_missing = cv_split_missing
@@ -125,9 +132,10 @@ class CrossValidationRunner:
         failed_folds: list[int] = []
 
         for fold_idx in range(self._n_folds):
-            self._logger.info(
-                f"\n{'=' * 60}\nFold {fold_idx + 1} / {self._n_folds}\n{'=' * 60}"
-            )
+            if self._is_primary:
+                self._logger.info(
+                    f"\n{'=' * 60}\nFold {fold_idx + 1} / {self._n_folds}\n{'=' * 60}"
+                )
             try:
                 pred_df, obs, metrics = self._run_fold(fold_idx)
                 fold_predictions.append(pred_df)
@@ -229,6 +237,8 @@ class CrossValidationRunner:
             # Group name links all folds of this model in the W&B UI
             wandb_run_name=f"{self._model_name}_{fold_name}",
             wandb_group=self._model_name,
+            solar_event_dir=self._config.paths['solar_event_dir'],
+            interpolation_dates_test_data=self._cv_split_missing['test'][fold_idx],
             model_name=fold_model_name,
             train_config_to_save_in_wandb=wandb_config,
             logger=self._logger,
@@ -336,9 +346,7 @@ class CrossValidationRunner:
         mc = self._config.model_config
         return SolarSwinTransformer(
             image_encoder_name=mc['image_encoder'],
-            use_pretrained_image_encoder_weights=mc.get(
-                'use_pretrained_image_encoder_weights', False
-            ),
+            use_pretrained_image_encoder_weights=True,
             num_physical_features=len(self._dataset.physical_features.columns),
             mu_head_hidden_layer_size=mc['mu']['hidden_layer_size'],
             sigma_head_hidden_layer_size=mc['sigma']['hidden_layer_size'],

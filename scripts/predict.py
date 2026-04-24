@@ -3,18 +3,6 @@
 This script loads a trained SolarSwinTransformer checkpoint, builds a
 prediction DataLoader for a user-defined time window, runs inference, and
 saves the resulting probabilistic solar wind speed (SWS) forecasts to disk.
-
-Typical usage::
-
-    python scripts/compare_models.py
-
-The model path and all data/output directories are resolved from the project
-configuration file (``config.yaml`` at the repository root).  To predict with
-a different model, edit the ``path_to_model`` variable near the top of
-``main()``.
-
-Pipeline position: run *after* training (``train.py`` / CV runner) and
-*before* any downstream evaluation or plotting scripts.
 """
 import pathlib
 from datetime import datetime
@@ -28,11 +16,22 @@ from proswin.model.solar_swin_transformer import load_model
 from proswin.model.solar_wind_predictor import SolarWindPredictor
 from proswin.utils.configurator import ConfigLoader
 
+# Enter here the path to the model you want to use for inference.
+# The path is relative to the results/models folder.
+MODEL_PATH = "full_model/171-211_fold_01.pth"
+
+# Enter here the start and end dates for inference.
+# The dates must be contained in the dataset and the prediction frequency is
+# one hour.
+PREDICTION_START = datetime(2020, 1, 1, 0)
+PREDICTION_END = datetime(2020, 1, 1, 23)
+
+# Enter here the path to the file where the computed predictions should be
+# stored. The path is relative to results/predictions.
+PREDICTION_PATH = "new_predictions.csv"
 
 def main() -> None:
     """Load a trained model and run inference over a fixed date range.
-    To change the model or the prediction window, edit the ``path_to_model``
-    variable and the ``pd.date_range(...)`` call inside this function.
 
     Raises:
         FileNotFoundError: If ``path_to_model`` does not point to an existing
@@ -46,10 +45,14 @@ def main() -> None:
     )
     config.logger.info("Using device: %s", device)
 
-    # Model — edit this path to switch between different trained checkpoints.
-    # Trained models are conventionally stored under config.paths['models'].
+    # ------------------------------------------------------------------
+    # Loading model and dataset
+    # ------------------------------------------------------------------
+
+    # Load a trained model checkpoint.
+    # Trained models are conventionally stored under results/models.
     path_to_model: pathlib.Path = (
-        config.paths["models"] / "171-211_full_model_fold_01.pth"
+        config.paths["models"] / pathlib.Path(MODEL_PATH)
     )
     config.logger.info("Loading model from: %s", path_to_model)
     model = load_model(path_to_model)
@@ -78,10 +81,14 @@ def main() -> None:
         logger=config.logger,
     )
 
-    # Edit start/end dates to change the prediction dates.
+    # ------------------------------------------------------------------
+    # Set up dataloader
+    # ------------------------------------------------------------------
+
+    # Compute the prediction dates.
     prediction_dates = pd.date_range(
-        start=datetime(2020, 1, 1, 0),
-        end=datetime(2020, 1, 1, 23),
+        start=PREDICTION_START,
+        end=PREDICTION_END,
         freq="1h",
     )
     config.logger.info(
@@ -100,8 +107,11 @@ def main() -> None:
         num_workers=None,
     )
 
-    # Run inference
-    output_path = config.paths["predictions"] / "new_predictions.csv"
+    # ------------------------------------------------------------------
+    # Inference
+    # ------------------------------------------------------------------
+
+    output_path = config.paths["predictions"] / PREDICTION_PATH
     predictor = SolarWindPredictor(model, device=device, logger=config.logger)
 
     config.logger.info("Running inference ...")

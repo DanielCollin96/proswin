@@ -42,18 +42,16 @@ class HSSFinder:
     _ASSOCIATION_WINDOW_DAYS: int = 3
 
     def __init__(self, path_to_events: Path) -> None:
-        parse_cols = [1, 3, 4, 5]
-        self.cme_list: pd.DataFrame = pd.read_csv(
-            path_to_events / "cme_list.csv", index_col=0, parse_dates=parse_cols
-        )
-        self.hss_list: pd.DataFrame = pd.read_csv(
-            path_to_events / "hss_list.csv", index_col=0, parse_dates=parse_cols
-        )
-        self.enhancement_list: pd.DataFrame = pd.read_csv(
-            path_to_events / "enhancement_list.csv",
-            index_col=0,
-            parse_dates=parse_cols,
-        )
+
+        self.cme_list = pd.read_csv(
+            path_to_events / "cme_list.csv", index_col=0,
+            parse_dates=['start', 'end', 'smoothed_peak_date', 'peak_date'])
+        self.hss_list = pd.read_csv(
+            path_to_events / "hss_list.csv", index_col=0,
+            parse_dates=['start', 'end', 'smoothed_peak_date', 'peak_date'])
+        self.enhancement_list = pd.read_csv(
+            path_to_events / "enhancement_list.csv", index_col=0,
+            parse_dates=['start', 'end', 'smoothed_peak_date', 'peak_date'])
 
     # ------------------------------------------------------------------
     # Public interface

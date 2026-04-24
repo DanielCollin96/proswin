@@ -24,6 +24,7 @@ from proswin.predictions import (
     ProbabilisticPrediction,
 )
 from proswin.evaluation.solar_wind_prediction_evaluator import PredictionEvaluator
+from proswin.evaluation.hss_finder import HSSFinder
 from proswin.model.solar_swin_transformer import (
     SolarSwinTransformer,
     load_model,
@@ -169,11 +170,13 @@ class SolarModelTrainer:
             pred_dir: Path | str,
             epoch_losses_dir: Path | str,
             use_multiple_gpus: bool = False,
-            gradient_clip_max_norm: float = 1.0,
+            gradient_clip_max_norm: float = 10.0,
             use_mixed_precision: bool = True,
             wandb_project: str | None = None,
             wandb_run_name: str | None = None,
             wandb_group: str | None = None,
+            solar_event_dir: Path | None = None,
+            interpolation_dates_test_data: pd.DatetimeIndex | None = None,
             train_config_to_save_in_wandb: dict | None = None,
             model_name: str | None = None,
             logger: logging.Logger | None = None,
@@ -190,6 +193,8 @@ class SolarModelTrainer:
         self._pred_dir.mkdir(parents=True, exist_ok=True)
         self._epoch_losses_dir = Path(epoch_losses_dir)
         self._epoch_losses_dir.mkdir(parents=True, exist_ok=True)
+        self._solar_event_dir = Path(solar_event_dir)
+        self._interpolation_dates_test_data = interpolation_dates_test_data
 
         self._grad_clip: float = float(gradient_clip_max_norm)
         self._use_amp: bool = use_mixed_precision and device.type == "cuda"
@@ -224,7 +229,7 @@ class SolarModelTrainer:
         # Clear any existing epoch log for this model to avoid stale rows
         log_path = self._epoch_losses_dir / f"{self.model_name}_training_log.csv"
         if log_path.exists():
-            log_path.unlink()
+            log_path.unlink(missing_ok=True)
 
         self._wandb_project = wandb_project
         if wandb_run_name is None:
@@ -282,9 +287,10 @@ class SolarModelTrainer:
                 "point_prediction=True."
             )
 
-        self._logger.info("=" * 60)
-        self._logger.info("Training stage 1: training image encoder + mu head")
-        self._logger.info("=" * 60)
+        if self._is_primary:
+            self._logger.info("=" * 60)
+            self._logger.info("Training stage 1: training image encoder + mu head")
+            self._logger.info("=" * 60)
 
         self._run_training(
             training_stage="mu",
@@ -354,10 +360,10 @@ class SolarModelTrainer:
             if pretrained_mu_checkpoint is not None
             else self._model_dir / f"{self.model_name}_mu_best.pth"
         )
-
-        self._logger.info("=" * 60)
-        self._logger.info("Training stage 2: training sigma head")
-        self._logger.info("=" * 60)
+        if self._is_primary:
+            self._logger.info("=" * 60)
+            self._logger.info("Training stage 2: training sigma head")
+            self._logger.info("=" * 60)
 
         self._reload_best_checkpoint(checkpoint_to_load)
         self._freeze_mu_and_encoder()
@@ -518,7 +524,11 @@ class SolarModelTrainer:
         self._model.train()
         total_loss = 0.0
 
-        pbar = tqdm(train_loader, desc="  Training", unit="batch", leave=False)
+        pbar = tqdm(train_loader,
+                    desc="  Training",
+                    unit="batch",
+                    leave=False,
+                    disable=not self._is_primary)
         for batch in pbar:
             batch = {k: v.to(self.device) for k, v in batch.items()}
             targets = batch["target"].float()
@@ -541,10 +551,19 @@ class SolarModelTrainer:
                 )
             self._gradient_scaler.step(optimizer)
             self._gradient_scaler.update()
+
             total_loss += loss.item()
+
             pbar.set_postfix(loss=f"{loss.item():.6f}")
 
+
+        if self._use_multiple_gpus:
+            total_loss_tensor = torch.tensor(total_loss, device=self.device)
+            dist.all_reduce(total_loss_tensor, op=dist.ReduceOp.SUM)
+            total_loss = (total_loss_tensor / dist.get_world_size()).item()
+
         return total_loss / len(train_loader)
+
 
     def _validate_epoch(
             self,
@@ -578,7 +597,8 @@ class SolarModelTrainer:
 
         with torch.no_grad():
             for batch in tqdm(
-                val_loader, desc="  Validating", unit="batch", leave=False
+                val_loader, desc="  Validating", unit="batch", leave=False,
+                disable=not self._is_primary
             ):
                 batch = {k: v.to(self.device) for k, v in batch.items()}
                 targets = batch["target"].float()
@@ -685,7 +705,15 @@ class SolarModelTrainer:
                     "got a single tensor."
                 )
             mu, sigma = output
-            return negative_log_likelihood_loss(targets, mu, sigma, weights=weights)
+            rank = dist.get_rank() if self._use_multiple_gpus else 0
+            if torch.isnan(mu).any():
+                raise RuntimeError(f"NaN detected in mu on rank {rank}")
+            if torch.isnan(sigma).any():
+                raise RuntimeError(f"NaN detected in sigma on rank {rank}")
+
+            loss = negative_log_likelihood_loss(targets, mu, sigma, weights=weights)
+
+            return loss #negative_log_likelihood_loss(targets, mu, sigma, weights=weights)
         else:
             raise NotImplementedError(
                 f"Loss function '{loss_function}' is not implemented."
@@ -786,26 +814,51 @@ class SolarModelTrainer:
         if self._use_multiple_gpus:
             dist.barrier()  # ensure all ranks wait for primary to finish saving
 
-        loaded_model = load_model(checkpoint_path)
+        # Only rank 0 loads from disk; state dict is then broadcast to all ranks
+        # to avoid filesystem race conditions on network storage.
+        if self._is_primary:
+            loaded_model = load_model(checkpoint_path)
 
-        if not loaded_model.point_prediction:
-            raise ValueError(
-                f"Checkpoint at '{checkpoint_path}' is already a probabilistic "
-                "model. train_sigma() expects a mu-stage "
-                "(point_prediction=True) checkpoint."
+            if not loaded_model.point_prediction:
+                raise ValueError(
+                    f"Checkpoint at '{checkpoint_path}' is already a probabilistic "
+                    "model. train_sigma() expects a mu-stage "
+                    "(point_prediction=True) checkpoint."
+                )
+            self._check_architecture_compatibility(loaded_model)
+            state_dict = loaded_model.state_dict()
+        else:
+            state_dict = None
+
+        # Broadcast the state dict from rank 0 to all other ranks
+        if self._use_multiple_gpus:
+            state_dict_list = [state_dict]
+            dist.broadcast_object_list(state_dict_list, src=0)
+            state_dict = state_dict_list[0]
+
+        # All ranks load the same weights
+        self._core_model.load_state_dict(state_dict)
+
+        if self._is_primary:
+            self._logger.info(
+                f"Checkpoint loaded: {checkpoint_path.name} | "
+                f"mu_head norm: "
+                f"{sum(p.norm().item() for p in self._core_model.prediction_head_mu.parameters()):.4f}"
             )
 
-        self._check_architecture_compatibility(loaded_model)
-
-        self._core_model.load_state_dict(loaded_model.state_dict())
+        # All ranks convert — this must happen on every rank so the model
+        # architecture is identical before DDP re-wrapping
         self._core_model.convert_to_probabilistic()
+
+        for name, param in self._core_model.prediction_head_sigma.named_parameters():
+            if torch.isnan(param).any() or torch.isinf(param).any():
+                raise RuntimeError(
+                    f"Non-finite values in sigma head parameter '{name}' after initialization"
+                )
 
         for param in self._core_model.parameters():
             param.requires_grad = True
 
-        # find_unused_parameters=True is required here because the encoder and
-        # mu head will be frozen after this call, so DDP would otherwise
-        # complain about parameters that never receive gradients.
         self._model = self._wrap_ddp(
             use_multiple_gpus=self._use_multiple_gpus,
             find_unused_parameters=True,
@@ -910,12 +963,19 @@ class SolarModelTrainer:
         )
 
         if target_series is not None:
-            evaluator = PredictionEvaluator(prediction, target_series)
+            hss_finder = HSSFinder(self._solar_event_dir)
+            evaluator = PredictionEvaluator(
+                prediction,
+                target_series,
+                hss_finder=hss_finder,
+                interpolation_dates=self._interpolation_dates_test_data
+            )
             results = evaluator.evaluate()
             if isinstance(results, tuple):
                 results = results[0]
-            self._logger.info("Test evaluation results:")
-            self._logger.info(f"\n{results.to_string()}")
+            if self._is_primary:
+                self._logger.info("Test evaluation results:")
+                self._logger.info(f"\n{results.to_string()}")
 
             if _WANDB_AVAILABLE and wandb.run is not None:
                 for metric in results.index:
@@ -970,6 +1030,7 @@ class SolarModelTrainer:
             epoch_duration: Wall-clock time for the epoch in seconds.
         """
         lr = optimizer.param_groups[0]["lr"]
+
         self._logger.info(
             f"Epoch {epoch:>4d} | train_loss={train_loss:.6f} | "
             f"val_loss={val_loss:.6f} | val_rmse={val_rmse:.4f} | "

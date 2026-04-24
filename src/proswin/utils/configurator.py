@@ -253,8 +253,10 @@ class ConfigLoader:
 
         if missing_vars:
             raise RuntimeError(
-                f"Missing environment variables for DDP: {missing_vars}. "
-                f"Ensure the script is launched with torchrun or equivalent."
+                f"The run has been configured with use_multiple_gpus=True, but"
+                f"environment variables for DDP are missing: {missing_vars}. "
+                f"Ensure the script is launched with torchrun or equivalent,"
+                f"or disable the multi-GPU setting."
             )
 
         self.rank = int(os.environ["RANK"])
@@ -263,13 +265,16 @@ class ConfigLoader:
 
         # Bind this process to its designated GPU
         torch.cuda.set_device(self.local_rank)
+        device = torch.device("cuda", self.local_rank)
 
         # NCCL is the recommended backend for GPU-to-GPU communication
         init_process_group(
             backend="nccl",
             init_method="env://",
             timeout=timedelta(seconds=60),
+            device_id=device,  # eliminates the "unknown device" warning and fixes the hang
         )
+
 
     def _set_seed(self, seed: int = 42) -> None:
         """Seed all random-number generators for reproducibility.

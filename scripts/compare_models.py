@@ -46,6 +46,10 @@ def main() -> None:
     project_root = pathlib.Path(__file__).parent.parent
     config = ConfigLoader(project_root, enable_logging=True, initialize_ddp=False)
 
+    # ------------------------------------------------------------------
+    # Configuration of PROSWIN models and comparison dataset
+    # ------------------------------------------------------------------
+
     # Model groups and channel configurations to evaluate.
     groups = ['image_only', 'full_model']
     model_names = [
@@ -92,7 +96,9 @@ def main() -> None:
         interpolation_dates = interpolation_dates.union(cv_split_missing['test'][i])
     interpolation_dates = interpolation_dates.sort_values()
 
-    # --- PROSWIN model group comparison -----------------------------------
+    # ------------------------------------------------------------------
+    # PROSWIN model group comparison
+    # ------------------------------------------------------------------
     for group in groups:
 
         hss_finder = HSSFinder(config.paths['solar_event_dir'])
@@ -133,7 +139,10 @@ def main() -> None:
     )
     comp_plotter.pred_score_comparison(preset='all_proswin')
 
-    # --- Literature comparison --------------------------------------------
+    # ------------------------------------------------------------------
+    # Literature comparison model and data preparation
+    # ------------------------------------------------------------------
+
     pred_dict = {}
     sws = pd.read_csv(
         config.paths['physical_features_dir'] / 'solar_wind_speed.csv',
@@ -200,6 +209,10 @@ def main() -> None:
             pred_dict[model], gap_len_threshold=pd.Timedelta(days=5)
         )
         intersection_dates = intersection_dates.intersection(pred_dict[model].index)
+
+    # ------------------------------------------------------------------
+    # Literature comparison computation
+    # ------------------------------------------------------------------
 
     target = sws.loc[intersection_dates]
     hss_finder = HSSFinder(config.paths['solar_event_dir'])

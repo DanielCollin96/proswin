@@ -1,8 +1,6 @@
 """Train the PROSWIN model on a fixed temporal split.
 
-Provides a non-cross-validated training run using hardcoded study-period
-date ranges (2010-06-01 – 2024-06-30 split into train / val / test). Use
-``scripts/cross_validation.py`` for the full CV pipeline instead.
+Provides a standard training run using a fixed train / val / test split.
 """
 import pathlib
 from datetime import datetime
@@ -18,6 +16,27 @@ from proswin.evaluation.solar_wind_prediction_evaluator import PredictionEvaluat
 from proswin.model.solar_model_trainer import SolarModelTrainer
 from proswin.model.solar_swin_transformer import SolarSwinTransformer
 from proswin.utils.configurator import ConfigLoader
+
+
+# Enter training, validation and test data ranges.
+# The dates must be contained in the loaded dataset.
+# Any timestamps that the dataset does not actually
+# contain are removed.
+TRAIN_DATES = pd.date_range(
+    start=datetime(2010, 6, 1),
+    end=datetime(2020, 12, 31, 23),
+    freq="h"
+)
+VAL_DATES = pd.date_range(
+    start=datetime(2021, 1, 1),
+    end=datetime(2022, 12, 31, 23),
+    freq="h"
+)
+TEST_DATES = pd.date_range(
+    start=datetime(2023, 1, 1),
+    end=datetime(2024, 6, 30, 23),
+    freq="h"
+)
 
 
 def main() -> None:
@@ -37,6 +56,10 @@ def main() -> None:
     try:
         config = ConfigLoader(project_root)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # ------------------------------------------------------------------
+        # Load dataset and set up dataloaders
+        # ------------------------------------------------------------------
 
         dataset = SolarDataset(
             solar_image_dir=config.paths['solar_image_dir'],
@@ -60,23 +83,9 @@ def main() -> None:
             logger=config.logger,
         )
 
-        # Fixed study-period boundaries for this non-CV training run.
-        # Intersection with dataset.target_dates removes any timestamps
-        # that the dataset does not actually contain (e.g. missing obs).
-        train_dates = pd.date_range(
-            start=datetime(2010, 6, 1), end=datetime(2020, 12, 31, 23), freq="h"
-        )
-        val_dates = pd.date_range(
-            start=datetime(2021, 1, 1), end=datetime(2022, 12, 31, 23), freq="h"
-        )
-        test_dates = pd.date_range(
-            start=datetime(2023, 1, 1), end=datetime(2024, 6, 30, 23), freq="h"
-        )
-
-
-        train_dates = train_dates.intersection(dataset.target_dates)
-        val_dates = val_dates.intersection(dataset.target_dates)
-        test_dates = test_dates.intersection(dataset.target_dates)
+        train_dates = TRAIN_DATES.intersection(dataset.target_dates)
+        val_dates = VAL_DATES.intersection(dataset.target_dates)
+        test_dates = TEST_DATES.intersection(dataset.target_dates)
 
         # Identify the missing hourly timestamps in the test split that the
         # evaluator should interpolate to facilitate a continuous HSS association.
@@ -92,9 +101,13 @@ def main() -> None:
             use_multiple_gpus=config.train_config['use_multiple_gpus'],
         )
 
+        # ------------------------------------------------------------------
+        # Initialize model and model trainer
+        # ------------------------------------------------------------------
+
         model = SolarSwinTransformer(
             image_encoder_name=config.model_config['image_encoder'],
-            use_pretrained_image_encoder_weights=False,
+            use_pretrained_image_encoder_weights=True,
             num_physical_features=len(dataset.physical_features.columns),
             mu_head_hidden_layer_size=(
                 config.model_config['mu']['hidden_layer_size']
@@ -122,16 +135,22 @@ def main() -> None:
         trainer = SolarModelTrainer(
             model=model,
             device=device,
-            model_dir=config.paths['results'] / 'models',
+            model_dir=config.paths['models'],
             pred_dir=config.paths['predictions'],
             epoch_losses_dir=config.paths['results'] / 'epoch_losses',
             use_multiple_gpus=config.train_config['use_multiple_gpus'],
             wandb_project=config.train_config.get('wandb_project'),
             wandb_run_name=None,
             model_name=model_name,
+            solar_event_dir=config.paths['solar_event_dir'],
+            interpolation_dates_test_data=missing_test,
             train_config_to_save_in_wandb=wandb_config,
             logger=config.logger,
         )
+
+        # ------------------------------------------------------------------
+        # Training
+        # ------------------------------------------------------------------
 
         # --- Stage 1: train the mu (point-forecast) head with MSE loss ------
         dataset.set_loss_function_weights(
@@ -178,7 +197,10 @@ def main() -> None:
         )
         trainer.finish_logging()
 
-        # --- Evaluate on the test split -------------------------------------
+        # ------------------------------------------------------------------
+        # Evaluation
+        # ------------------------------------------------------------------
+
         csv_path = (
             config.paths['predictions']
             / f"{config.model_config['model_name']}_sigma_test.csv"

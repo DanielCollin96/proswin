@@ -1,11 +1,8 @@
 """Load and evaluate saved model predictions.
 
 Demonstrates how to read a prediction CSV produced by the training pipeline
-and run the full evaluation suite (CRPS, RMSE, Brier scores, HSS metrics).
-To evaluate a different model, replace ``'test_model'`` in
-``path_to_predictions`` with the desired model name.
+and run the full evaluation and plotting pipeline.
 """
-import logging
 import pathlib
 
 import pandas as pd
@@ -21,6 +18,18 @@ from proswin.evaluation.plotter import (SolarWindPredictionPlotter,
                                         plot_cv_split)
 from proswin.utils.configurator import ConfigLoader
 
+
+# Enter here the path to the file where the predictions are
+# stored. The path is relative to results/predictions.
+PREDICTION_PATH = "predictions_best_model.csv"
+
+# Enter here the directory where the evaluation results should
+# be stored. The path is relative to results/evaluation.
+EVALUATION_DIRECTORY = "new_evaluation"
+
+# Enter here the directory where the figures should
+# stored. The path is relative to results/figures.
+FIGURE_DIRECTORY = "new_figures"
 
 def main() -> None:
     """Load a saved prediction CSV, evaluate it, and generate all figures.
@@ -39,8 +48,6 @@ def main() -> None:
     5. Plot a single-timestep CRPS illustration.
     6. Visualise the cross-validation split for the prediction period.
 
-    To evaluate a different model, edit ``path_to_predictions``.
-
     Notes:
         ``interpolation_dates`` controls which temporal gaps are filled before
         HSS peak association:
@@ -55,11 +62,15 @@ def main() -> None:
     project_root = pathlib.Path(__file__).parent.parent
     config = ConfigLoader(project_root)
 
+    # ------------------------------------------------------------------
+    # Loading predictions and observations
+    # ------------------------------------------------------------------
+
     # Replace 'test_model' with the name of the model you want to evaluate.
     # The CSV is written by SolarModelTrainer under config.paths['predictions'].
     path_to_predictions = (
         config.paths['predictions']
-        / '171-211_full_model.csv'
+        / pathlib.Path(PREDICTION_PATH)
     )
 
     saved_prediction_data = pd.read_csv(
@@ -77,6 +88,11 @@ def main() -> None:
         saved_prediction_data.loc[:, lognorm_cols]
     )
     observations = saved_prediction_data.loc[:, 'observation']
+
+    # ------------------------------------------------------------------
+    # Evaluation
+    # ------------------------------------------------------------------
+
     hss_finder = HSSFinder(config.paths['solar_event_dir'])
 
     # None interpolates all gaps; HSS association requires a continuous series.
@@ -88,13 +104,21 @@ def main() -> None:
         predictions, observations, hss_finder, interpolation_dates
     )
     results, bs_table = evaluator.evaluate()
+
+    eval_dir = config.paths['evaluation'] / pathlib.Path(EVALUATION_DIRECTORY)
+    eval_dir.mkdir(parents=True, exist_ok=True)
+
+    results.to_csv(eval_dir / 'metrics.csv')
+    bs_table.to_csv(eval_dir / 'brier_scores.csv')
+
     config.logger.info("Evaluation results:\n%s", results)
     config.logger.info("Brier score table:\n%s", bs_table)
 
     # ------------------------------------------------------------------
-    # Figures
+    # Plotting
     # ------------------------------------------------------------------
-    figure_dir = config.paths["figures"] / config.model_config["model_name"]
+
+    figure_dir = config.paths["figures"] / pathlib.Path(FIGURE_DIRECTORY)
 
     plotter = SolarWindPredictionPlotter(
         predictions=predictions,

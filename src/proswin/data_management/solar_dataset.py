@@ -143,9 +143,14 @@ class SolarDataset(Dataset):
         # Derived channel → column-name mapping for the requested channels
         self._image_cols: list[str] = [CHANNEL_TO_COL[c] for c in self.channels]
 
+        if self.logger is not None and self.rank == 0:
+            self.logger.info('Checking data paths...')
         self._check_paths()
         # Physical feature time series are only needed when building from
         # scratch; skip loading them if ml_dataset.csv is already available.
+
+        if self.logger is not None and self.rank == 0:
+            self.logger.info('Checking for precomputed dataset...')
         if not (self.ml_data_dir / 'ml_dataset.csv').exists():
             self._load_physical_features()
 
@@ -196,7 +201,8 @@ class SolarDataset(Dataset):
             if not (self.solar_event_dir / file).exists():
                 msg = (
                     f"'{file}' not found in '{self.solar_event_dir}'. "
-                    f"Fallback to computing event lists from scratch."
+                    f"Fallback to computing event lists from scratch"
+                    f"currently not implemented. Use EventBuilder manually."
                 )
                 if self.logger is not None:
                     self.logger.warning(msg)
