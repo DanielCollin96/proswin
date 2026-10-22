@@ -1,6 +1,6 @@
 # PROSWIN: Probabilistic Solar Wind Speed Forecasting
 
-Official repository for [PROSWIN: Probabilistic Solar Wind Speed Forecasting Using Deep Distributional Regression From Solar Images](https://doi.org/TBD), published in *TBD* (2026) by [Daniel Collin](https://www.linkedin.com/in/daniel-collin-52abb0205/), [Yuri Shprits](https://www.gfz.de/staff/yuri.shprits), [Luca Chiarabini](https://www.linkedin.com/in/luca-chiarabini-596a07195/) [Stefan J. Hofmeister](https://www.astro.columbia.edu/content/stefan-hofmeister), [Nadja Klein](https://www.kleinlab.de/subpages_team/klein.html) and [Guillermo Gallego](http://www.guillermogallego.es).
+Official repository for [PROSWIN: Probabilistic Solar Wind Speed Forecasting Using Deep Distributional Regression From Solar Images](https://arxiv.org/abs/2609.26683), accepted in *AGU Advances* (2026) by [Daniel Collin](https://www.linkedin.com/in/daniel-collin-52abb0205/), [Yuri Shprits](https://www.gfz.de/staff/yuri.shprits), [Luca Chiarabini](https://www.linkedin.com/in/luca-chiarabini-596a07195/) [Stefan J. Hofmeister](https://www.astro.columbia.edu/content/stefan-hofmeister), [Nadja Klein](https://www.kleinlab.de/subpages_team/klein.html) and [Guillermo Gallego](http://www.guillermogallego.es).
 
 <div align="center">
   <img src="assets/eyecatcher.png" alt="Alt Text">
@@ -10,7 +10,7 @@ Official repository for [PROSWIN: Probabilistic Solar Wind Speed Forecasting Usi
 
 <h2 align="center">
 
-[Journal Publication](https://doi.org/TBD) | [Data Publication](https://doi.org/10.5880/GFZ.OJSJ.2026.001) | [Solar Image Repo](https://github.com/DanielCollin96/solar_image_processing)
+[Preprint Publication](https://arxiv.org/abs/2609.26683) | [Data Publication](https://doi.org/10.5880/GFZ.OJSJ.2026.001) | [Solar Image Repo](https://github.com/DanielCollin96/solar_image_processing)
 
 </h2>
 
@@ -268,12 +268,14 @@ uv run scripts/compare_models.py
 If you use this work in your research, please cite it as follows:
 
 ```bibtex
-@article{Collin2026,
-  title   = {PROSWIN: Probabilistic Solar Wind Speed Forecasting Using Deep Distributional Regression From Solar Images},
-  author = {Collin, Daniel and Shprits, Yuri and  Chiarabini, Luca and Hofmeister, Stefan J. and Klein, Nadja and Gallego, Guillermo},
-  journal = {TBD},
-  year    = {2026},
-  url     = {https://doi.org/TBD}
+@misc{collin2026,
+      title={PROSWIN: Probabilistic Solar Wind Speed Forecasting Using Deep Distributional Regression From Solar Images}, 
+      author={Daniel Collin and Yuri Shprits and Luca Chiarabini and Stefan J. Hofmeister and Nadja Klein and Guillermo Gallego},
+      year={2026},
+      eprint={2609.26683},
+      archivePrefix={arXiv},
+      primaryClass={astro-ph.SR},
+      url={https://arxiv.org/abs/2609.26683}, 
 }
 ```
 
