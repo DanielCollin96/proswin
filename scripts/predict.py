@@ -21,8 +21,8 @@ from proswin.utils.configurator import ConfigLoader
 MODEL_PATH = "full_model/171-211_fold_01.pth"
 
 # Enter here the start and end dates for inference.
-# The dates must be contained in the dataset and the prediction frequency is
-# one hour.
+# The prediction frequency is one hour. Timestamps inside the window that are
+# missing from the dataset (data gaps) are skipped.
 PREDICTION_START = datetime(2020, 1, 1, 0)
 PREDICTION_END = datetime(2020, 1, 1, 23)
 
@@ -97,6 +97,15 @@ def main() -> None:
         prediction_dates[-1],
         len(prediction_dates),
     )
+
+    # Restrict to timestamps with complete input data; gaps are skipped.
+    skipped_dates = prediction_dates.difference(dataset.target_dates)
+    prediction_dates = prediction_dates.intersection(dataset.target_dates)
+    if len(skipped_dates) > 0:
+        config.logger.warning(
+            "Skipping %d timestamps with missing data (no prediction made).",
+            len(skipped_dates),
+        )
 
     pred_loader = get_prediction_loader(
         dataset=dataset,
