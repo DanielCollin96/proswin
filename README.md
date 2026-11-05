@@ -1,6 +1,6 @@
 # PROSWIN: Probabilistic Solar Wind Speed Forecasting
 
-Official repository for [PROSWIN: Probabilistic Solar Wind Speed Forecasting Using Deep Distributional Regression From Solar Images](https://arxiv.org/abs/2609.26683), accepted in *AGU Advances* (2026) by [Daniel Collin](https://www.linkedin.com/in/daniel-collin-52abb0205/), [Yuri Shprits](https://www.gfz.de/staff/yuri.shprits), [Luca Chiarabini](https://www.linkedin.com/in/luca-chiarabini-596a07195/) [Stefan J. Hofmeister](https://www.astro.columbia.edu/content/stefan-hofmeister), [Nadja Klein](https://www.kleinlab.de/subpages_team/klein.html) and [Guillermo Gallego](http://www.guillermogallego.es).
+Official repository for [PROSWIN: Probabilistic Solar Wind Speed Forecasting Using Deep Distributional Regression From Solar Images](https://doi.org/10.1029/2026AV002524), published in *AGU Advances* (2026) by [Daniel Collin](https://www.linkedin.com/in/daniel-collin-52abb0205/), [Yuri Shprits](https://www.gfz.de/staff/yuri.shprits), [Luca Chiarabini](https://www.linkedin.com/in/luca-chiarabini-596a07195/) [Stefan J. Hofmeister](https://www.astro.columbia.edu/content/stefan-hofmeister), [Nadja Klein](https://www.kleinlab.de/subpages_team/klein.html) and [Guillermo Gallego](http://www.guillermogallego.es).
 
 <div align="center">
   <img src="assets/eyecatcher.png" alt="Alt Text">
@@ -10,7 +10,7 @@ Official repository for [PROSWIN: Probabilistic Solar Wind Speed Forecasting Usi
 
 <h2 align="center">
 
-[Preprint Publication](https://arxiv.org/abs/2609.26683) | [Data Publication](https://doi.org/10.5880/GFZ.OJSJ.2026.001) | [Solar Image Repo](https://github.com/DanielCollin96/solar_image_processing)
+[Journal Publication](https://doi.org/10.1029/2026AV002524) | [Data Publication](https://doi.org/10.5880/GFZ.OJSJ.2026.001) | [Solar Image Repo](https://github.com/DanielCollin96/solar_image_processing)
 
 </h2>
 
@@ -149,7 +149,8 @@ After unpacking, update the `paths` section of `configs/config.yaml` to point to
 │   └── HMI/                   # HMI line-of-sight magnetograms
 ├── machine_learning/        
 │   ├── ml_dataset.csv         # Feature values
-│   └── literature_models.csv  # Needed for literature comparison
+│   ├── point_prediction_models.csv     # Literature point forecasts, needed for literature comparison
+│   └── ensemble_prediction_models.csv  # MAS+HUXt and WSA+HUXt ensembles, needed for literature comparison
 ├── physical_features/         # Scalar time series (CSV)
 │   ├── solar_wind_speed.csv   # Needed for baseline model comparison
 │   ├── sunspot_number.csv     # Needed for solar cycle plot
@@ -268,14 +269,15 @@ uv run scripts/compare_models.py
 If you use this work in your research, please cite it as follows:
 
 ```bibtex
-@misc{collin2026,
-      title={PROSWIN: Probabilistic Solar Wind Speed Forecasting Using Deep Distributional Regression From Solar Images}, 
-      author={Daniel Collin and Yuri Shprits and Luca Chiarabini and Stefan J. Hofmeister and Nadja Klein and Guillermo Gallego},
-      year={2026},
-      eprint={2609.26683},
-      archivePrefix={arXiv},
-      primaryClass={astro-ph.SR},
-      url={https://arxiv.org/abs/2609.26683}, 
+@article{Collin2026,
+    author = {Collin, Daniel and Shprits, Yuri and Chiarabini, Luca and Hofmeister, Stefan J. and Klein, Nadja and Gallego, Guillermo},
+    title = {PROSWIN: Probabilistic Solar Wind Speed Forecasting Using Deep Distributional Regression From Solar Images},
+    journal = {AGU Advances},
+    volume = {7},
+    number = {8},
+    pages = {e2026AV002524},
+    doi = {https://doi.org/10.1029/2026AV002524},
+    year = {2026}
 }
 ```
 
@@ -283,12 +285,12 @@ If you use the dataset, please cite:
 
 ```bibtex
 @misc{Collin2026dataset,
-  title = {Solar Images and Physical Features for Probabilistic Solar Wind Speed Prediction},
-  author = {Collin, Daniel and Shprits, Yuri and  Chiarabini, Luca and Hofmeister, Stefan J. and Klein, Nadja and Gallego, Guillermo},
-  publisher = {GFZ Data Services},
-  year = {2026},
-  howpublished = {Data Set},
-  doi = {10.5880/GFZ.OJSJ.2026.001}
+    title = {Solar Images and Physical Features for Probabilistic Solar Wind Speed Prediction},
+    author = {Collin, Daniel and Shprits, Yuri and  Chiarabini, Luca and Hofmeister, Stefan J. and Klein, Nadja and Gallego, Guillermo},
+    publisher = {GFZ Data Services},
+    year = {2026},
+    howpublished = {Data Set},
+    doi = {10.5880/GFZ.OJSJ.2026.001}
 }
 ```
 ---
