@@ -3,7 +3,7 @@
 Official repository for [PROSWIN: Probabilistic Solar Wind Speed Forecasting Using Deep Distributional Regression From Solar Images](https://doi.org/10.1029/2026AV002524), published in *AGU Advances* (2026) by [Daniel Collin](https://www.linkedin.com/in/daniel-collin-52abb0205/), [Yuri Shprits](https://www.gfz.de/staff/yuri.shprits), [Luca Chiarabini](https://www.linkedin.com/in/luca-chiarabini-596a07195/) [Stefan J. Hofmeister](https://www.astro.columbia.edu/content/stefan-hofmeister), [Nadja Klein](https://www.kleinlab.de/subpages_team/klein.html) and [Guillermo Gallego](http://www.guillermogallego.es).
 
 <div align="center">
-  <img src="assets/eyecatcher.png" alt="Alt Text">
+  <img src="assets/eyecatcher.jpg" alt="Alt Text">
 </div>
 
 
